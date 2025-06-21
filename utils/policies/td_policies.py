@@ -225,8 +225,9 @@ class Actor(SAC_Actor):
         :return:
             Mean, standard deviation and optional keyword arguments.
         """
-        # obs = obs_as_tensor(obs, device=self.device)
-        # obs = obs.to(self.device)
+        # Convert observation to tensor(s) on the correct device
+        obs = obs_as_tensor(obs, device=self.device)
+
         if hasattr(self.features_extractor, "recurrent_extractor"):
             features, h = self.extract_features(obs, self.features_extractor)
         else:

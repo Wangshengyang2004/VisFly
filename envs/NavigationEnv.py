@@ -56,6 +56,8 @@ class NavigationEnv(DroneGymEnvsBase):
         )
 
         self.target = th.ones((self.num_envs, 1)) @ th.as_tensor([9, 0., 1] if target is None else target).reshape(1, -1)
+        # Ensure target tensor is on the correct device
+        self.target = self.target.to(self.device)
         self.observation_space["target"] = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
 
         self.success_radius = 0.5
@@ -85,16 +87,25 @@ class NavigationEnv(DroneGymEnvsBase):
         # precise and stable target flight
         base_r = 0.1
         thrd_perce = th.pi / 18
-        reward = base_r * 0 + \
-                 ((self.velocity * (self.target - self.position)).sum(dim=1) / (1e-6 + (self.target - self.position).norm(dim=1))).clamp_max(10) * 0.01 + \
-                 (((self.direction * self.velocity).sum(dim=1) / (1e-6 + self.velocity.norm(dim=1)) / 1).clamp(-1., 1.).acos().clamp_min(thrd_perce) - thrd_perce) * -0.01 + \
-                 (self.orientation - th.tensor([1, 0, 0, 0])).norm(dim=1) * -0.00001 + \
-                 (self.velocity - 0).norm(dim=1) * -0.002 + \
-                 (self.angular_velocity - 0).norm(dim=1) * -0.002 + \
-                 1 / (self.collision_dis + 0.2) * -0.01 + \
-                 (1 - self.collision_dis).relu() * ((self.collision_vector * (self.velocity - 0)).sum(dim=1) / (1e-6 + self.collision_dis)).relu() * -0.005 + \
-                 self._success * (self.max_episode_steps - self._step_count) * base_r * (0.2 + 0.8 / (1 + 1 * self.velocity.norm(dim=1)))
-
+        # Compute reward, making sure all constants are on the correct device
+        reward = (
+            base_r * 0
+            + ((self.velocity * (self.target - self.position)).sum(dim=1)
+               / (1e-6 + (self.target - self.position).norm(dim=1))).clamp_max(10) * 0.01
+            + (((self.direction * self.velocity).sum(dim=1)
+                / (1e-6 + self.velocity.norm(dim=1))).clamp(-1.0, 1.0)
+               .acos().clamp_min(thrd_perce) - thrd_perce) * -0.01
+            # Orientation difference from [1,0,0,0] quaternion
+            + (self.orientation - th.tensor([1, 0, 0, 0], device=self.device)).norm(dim=1) * -0.00001
+            + (self.velocity - 0).norm(dim=1) * -0.002
+            + (self.angular_velocity - 0).norm(dim=1) * -0.002
+            + (1.0 / (self.collision_dis + 0.2)) * -0.01
+            + (1 - self.collision_dis).relu()
+              * ((self.collision_vector * (self.velocity - 0)).sum(dim=1)
+                 / (1e-6 + self.collision_dis)).relu() * -0.005
+            + self._success * (self.max_episode_steps - self._step_count)
+              * base_r * (0.2 + 0.8 / (1 + self.velocity.norm(dim=1)))
+        )
         return reward
 
 
@@ -144,6 +155,8 @@ class NavigationEnv2(DroneGymEnvsBase):
         )
         self.max_sense_radius = 10
         self.target = th.tile(th.as_tensor([14, 0., 1] if target is None else target), (self.num_envs, 1))
+        # Ensure target tensor is on the correct device
+        self.target = self.target.to(self.device)
         # self.encoder = encoder
         # self.encoder.load_state_dict(th.load(os.path.dirname(__file__) + '/../utils/tools/depth_autoencoder.pth'))
         # self.encoder.eval()

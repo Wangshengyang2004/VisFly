@@ -186,6 +186,9 @@ class RolloutBuffer(BaseBuffer):
         :param last_values: state value estimation for the last step (one for each env)
         :param dones: if the last step was a terminal step (one bool for each env).
         """
+        # If dones is a torch tensor, convert to numpy for subtraction
+        if isinstance(dones, th.Tensor):
+            dones = dones.clone().cpu().numpy()
         # Convert to numpy
         last_values = last_values.clone().cpu().numpy().flatten()
 
@@ -535,6 +538,10 @@ class OnPolicyAlgorithm(BaseAlgorithm):
                 values = self.policy.predict_values(obs_as_tensor(new_obs, self.observation_space, self.device))  # type: ignore[arg-type]
             else:
                 values = self.policy.predict_values(obs_as_tensor(new_obs, self.observation_space, self.device))  # type: ignore[arg-type]
+
+        # Convert dones to numpy if it's a torch tensor to avoid bool-tensor subtraction errors
+        if isinstance(dones, th.Tensor):
+            dones = dones.clone().cpu().numpy()
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 

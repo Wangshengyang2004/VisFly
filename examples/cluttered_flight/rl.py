@@ -2,10 +2,10 @@
 
 import sys
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import numpy as np
 import torch
 import time
-
 sys.path.append(os.getcwd())
 from VisFly.utils.policies import extractors
 from VisFly.utils.algorithms.ppo import ppo
@@ -14,11 +14,11 @@ import torch as th
 from VisFly.envs.NavigationEnv import NavigationEnv
 from VisFly.utils.launcher import rl_parser, training_params
 from VisFly.utils.type import Uniform
-
+from habitat_sim import SensorType
 args = rl_parser().parse_args()
 """ SAVED HYPERPARAMETERS """
-training_params["num_env"] = 96
-training_params["learning_step"] = 1e7
+training_params["num_env"] = 48
+training_params["learning_step"] = 1e6
 training_params["comment"] = args.comment
 training_params["max_episode_steps"] = 256
 training_params["n_steps"] = training_params["max_episode_steps"]
@@ -38,8 +38,13 @@ random_kwargs = {
         }
 }
 
+sensor_kwargs = [{
+    "sensor_type": SensorType.DEPTH,
+    "uuid": "depth",
+    "resolution": [64,64],
+}]
 # torch.autograd.detect_anomaly()
-# random_kwargs = {}
+random_kwargs = {}
 
 latent_dim = 256
 latent_dim = None
@@ -55,6 +60,9 @@ def main():
                             scene_kwargs={
                                 "path": scene_path,
                             },
+                            requires_grad=True,
+                            device="cpu",
+                            sensor_kwargs=sensor_kwargs
                             )
 
         if args.weight is not None:
@@ -121,23 +129,25 @@ def main():
     else:
         test_model_path = save_folder + args.weight
         from test import Test
-        env = NavigationEnv(num_agent_per_scene=1, visual=True,
-                            random_kwargs=random_kwargs,
-                            scene_kwargs={
-                                "path": scene_path,
-                                "render_settings": {
-                                    "mode": "fix",
-                                    "view": "custom",
-                                    "resolution": [1080, 1920],
-                                    # "position": th.tensor([[6., 6.8, 5.5], [6,4.8,4.5]]),
-                                    "position": th.tensor([[7., 6.8, 5.5], [7, 4.8, 4.5]]),
-                                    "line_width": 6.,
-
-                                    # "point": th.tensor([[9., 0, 1], [1, 0, 1]]),
-                                    "trajectory": True,
-                                }
-                            },
-                            latent_dim=latent_dim)
+        env = NavigationEnv(
+            num_agent_per_scene=1,
+            random_kwargs=random_kwargs,
+            visual=True,
+            max_episode_steps=training_params["max_episode_steps"],
+            scene_kwargs={
+                "path": scene_path,
+                "render_settings": {
+                    "mode": "fix",
+                    "view": "custom",
+                    "resolution": [1080, 1920],
+                    "position": th.tensor([[7., 6.8, 5.5], [7, 4.8, 4.5]]),
+                    "line_width": 6.,
+                    "trajectory": True,
+                }
+            },
+            sensor_kwargs=sensor_kwargs,
+            device="cpu",
+        )
 
         model = ppo.load(test_model_path, env=env)
 

@@ -102,7 +102,7 @@ class TrackEnv(DroneGymEnvsBase):
         reward = (
                 base_r +
                 (self.position - self.target[:, 0, :]).norm(dim=1) * pos_factor +
-                (self.orientation - th.tensor([1, 0, 0, 0])).norm(dim=1) * -0.00001 +
+                (self.orientation - th.tensor([1, 0, 0, 0], device=self.device)).norm(dim=1) * -0.00001 +
                 (self.velocity - 0).norm(dim=1) * -0.002 +
                 (self.angular_velocity - 0).norm(dim=1) * -0.002
         )

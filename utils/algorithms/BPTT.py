@@ -93,6 +93,8 @@ class BPTT(shac):
         current_step, previous_step, previous_time = 0, 0, 0
         try:
             with (tqdm(total=total_timesteps) as pbar):
+                # Initialize environment to set up internal state (motor_omega, thrusts, etc.)
+                self.env.reset()
                 while current_step < total_timesteps:
                     self._update_current_progress_remaining(num_timesteps=current_step, total_timesteps=total_timesteps)
                     optimizers = [self.actor.optimizer, self.critic.optimizer]

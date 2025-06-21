@@ -47,14 +47,22 @@ def main():
     # Testing mode with a trained weight
     else:
         test_model_path = save_folder + args.weight
-        from test import Test
+        from tst import Test
         env = HoverEnv2(**config["eval_env"])
-        model = BPTT.load(test_model_path, env=env)
+        # Recreate BPTT model with saved architecture and then load weights
+        model = BPTT(
+            env=env,
+            seed=args.seed,
+            comment=args.comment,
+            **config["algorithm"]
+        )
+        model = model.load(test_model_path)
 
         test_handle = Test(
             model=model,
             save_path=os.path.dirname(os.path.realpath(__file__)) + "/saved/test",
-            name=args.weight)
+            name=args.weight,
+            env=env)
         test_handle.test(**config["test"])
 
 

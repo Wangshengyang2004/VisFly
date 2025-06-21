@@ -77,7 +77,7 @@ class DroneGymEnvsBase(VecEnv):
 
         )
 
-        self.device = device
+        self.device = _env_device  # Use the actual device that the environment is using
 
         self.num_agent = num_agent_per_scene * num_scene
         self.num_scene = num_scene
@@ -135,16 +135,16 @@ class DroneGymEnvsBase(VecEnv):
         else:
             raise ValueError("action_type should be one of ['bodyrate', 'thrust', 'velocity']")
 
-        self._step_count = th.zeros((self.num_agent,), dtype=th.int32)
-        self._reward = th.zeros((self.num_agent,))
-        self._rewards = th.zeros((self.num_agent,))
-        self._action = th.zeros((self.num_agent, 4))
+        self._step_count = th.zeros((self.num_agent,), dtype=th.int32, device=self.device)
+        self._reward = th.zeros((self.num_agent,), device=self.device)
+        self._rewards = th.zeros((self.num_agent,), device=self.device)
+        self._action = th.zeros((self.num_agent, 4), device=self.device)
         self._observations = TensorDict({})
 
-        self._success = th.zeros(self.num_agent, dtype=bool)
-        self._failure = th.zeros(self.num_agent, dtype=bool)
-        self._episode_done = th.zeros(self.num_agent, dtype=bool)
-        self._done = th.zeros(self.num_agent, dtype=bool)
+        self._success = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._failure = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._episode_done = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._done = th.zeros(self.num_agent, dtype=bool, device=self.device)
         self._info = [{"TimeLimit.truncated": False} for _ in range(self.num_agent)]
 
         self._indiv_rewards = None
@@ -177,7 +177,7 @@ class DroneGymEnvsBase(VecEnv):
                 self._indiv_rewards = {}
                 for key, value in reward_result.items():
                     if key != "reward":
-                        self._indiv_rewards[key] = th.zeros((self.num_agent,))
+                        self._indiv_rewards[key] = th.zeros((self.num_agent,), device=self.device)
             for key, value in reward_result.items():
                 if key != "reward" and key in self._indiv_rewards:
                     self._indiv_rewards[key] += value

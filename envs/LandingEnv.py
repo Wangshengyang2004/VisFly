@@ -113,7 +113,7 @@ class LandingEnv(DroneGymEnvsBase):
                 0.1 * (3 - self.position[:, 2]).clamp(0, 3) / 3 * 2 + \
                 -0.02 * self.velocity.norm(dim=1) + \
                 -0.01 * self.angular_velocity.norm(dim=1) + \
-                0.1 * 20 * self._success * (10 + (th.tensor(self.max_episode_steps, device=self.device) - th.tensor(self._step_count, device=self.device))) / (1 + 2 * self.velocity.norm(dim=1))  # / (self.velocity.norm(dim=1) + 1)
+                0.1 * 20 * self._success * (10 + (self.max_episode_steps - self._step_count)) / (1 + 2 * self.velocity.norm(dim=1))  # / (self.velocity.norm(dim=1) + 1)
 
         return reward
 
@@ -161,7 +161,7 @@ class LandingEnv2(LandingEnv):
         return self.is_collision
 
     def get_reward(self) -> th.Tensor:
-        eta = th.as_tensor(1.2)
+        eta = th.as_tensor(1.2, device=self.device)
         v_l = 1 * (self.position[:, 2] - 0).clip(min=0.05, max=1).clone().detach()
         r_p = -0.1
         descent_v = -self.velocity[:, 2] - 0
@@ -173,7 +173,7 @@ class LandingEnv2(LandingEnv):
         r_z = ~r_z_first * (eta.pow(-4 * descent_v / v_l + 5) - 1) / (eta - 1) * 0.1 + \
               r_z_first * (eta.pow(descent_v / v_l) - 1) / (eta - 1) * 0.1
 
-        rho = th.as_tensor(1.2)
+        rho = th.as_tensor(1.2, device=self.device)
         d_s = 2. * (self.position[:, 2] - 0).clip(min=0.05, max=1).clone().detach()
         d_xy = (self.target - self.position)[:, :2].norm(dim=1) - 0
         r_xy_punish = d_xy > d_s

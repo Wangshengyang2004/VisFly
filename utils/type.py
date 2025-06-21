@@ -102,15 +102,40 @@ class TensorDict(dict):
     def __init__(self, data):
         super().__init__(data)
 
-    # return a new detach, do not change instance itself
     def detach(self):
-        return TensorDict({key: self[key].detach() for key in self.keys()})
+        """
+        Return a new TensorDict with all values detached; if a value is not a torch.Tensor,
+        convert it to a tensor first.
+        """
+        new_data = {}
+        for key, value in self.items():
+            if isinstance(value, th.Tensor):
+                new_data[key] = value.detach()
+            else:
+                # Convert numpy or other array-like to tensor
+                try:
+                    new_data[key] = th.as_tensor(value)
+                except Exception:
+                    # Fallback: store value as is
+                    new_data[key] = value
+        return TensorDict(new_data)
 
     def clone(self):
-        for key in self.keys():
-            self[key] = self[key].clone()
-
-        return self
+        """
+        Return a new TensorDict with all values cloned; if a value is not a torch.Tensor,
+        convert it to a torch.Tensor first.
+        """
+        new_data = {}
+        for key, value in self.items():
+            if isinstance(value, th.Tensor):
+                new_data[key] = value.clone()
+            else:
+                # Convert numpy or other array-like to tensor then clone
+                try:
+                    new_data[key] = th.as_tensor(value).clone()
+                except Exception:
+                    new_data[key] = value
+        return TensorDict(new_data)
 
     def __getitem__(self, key: Any) -> Any:
         if isinstance(key, str):

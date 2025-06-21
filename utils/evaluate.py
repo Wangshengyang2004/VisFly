@@ -61,6 +61,7 @@ class TestBase:
         self.save_path = os.path.join(save_path, name) if save_path is not None else os.path.dirname(os.path.abspath(sys.argv[0])) + "/saved/test/" + name
         if self.save_path.endswith((".zip", ".rar", ".pth")):
             self.save_path = self.save_path[:-4]
+        print(model)
         self.model = model
         self.env = env
         self.name = name
@@ -160,9 +161,12 @@ class TestBase:
         else:
             figs = []
         if is_video:
-            self.play(is_sub_video=is_sub_video)
-            if is_video_save:
-                self.save_video()
+            if self.env is not None:
+                self.play(is_sub_video=is_sub_video)
+                if is_video_save:
+                    self.save_video()
+            else:
+                print("[Warning] self.env is None, skipping play() and save_video().")
 
         render_video = th.as_tensor(np.stack(self.render_image_all, axis=0)).unsqueeze(0) if len(self.render_image_all) > 0 else None
         return figs, render_video, mean_r, mean_l

@@ -18,7 +18,7 @@ algorithm:
   horizon: 256
   tau: 0.005
   gamma: 0.99
-  device: cuda
+  device: cpu
   batch_size: 10000
 
 env:
@@ -27,7 +27,7 @@ env:
   scene_kwargs:
     path: VisFly/datasets/spy_datasets/configs/garage_empty
   visual: False
-  device: cuda
+  device: cpu
   tensor_output: True
 
 learn:
@@ -50,7 +50,7 @@ eval_env:
 test:
   is_fig: True
   is_fig_save: True
-  is_render: True
+  # is_render: True
   is_video: True
   is_video_save: True
   render_kwargs: {}
