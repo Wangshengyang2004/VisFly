@@ -62,7 +62,7 @@ class TestBase:
         if self.save_path.endswith((".zip", ".rar", ".pth")):
             self.save_path = self.save_path[:-4]
         self.model = model
-        self.env = env
+        self.env = env if env else model.env
         self.name = name
 
         self.obs_all = []
@@ -94,10 +94,8 @@ class TestBase:
         # This allows video saving without interactive playback (useful for remote servers)
         if policy is None:
             policy = self.model.policy
-        if self.env is not None:
-            env = self.env
-        else:
-            env = self.model.env
+        env = self.env
+
         # done_all = th.full((env.num_envs,), False)
         obs = env.reset(is_test=True)
         self._img_names = [name for name in obs.keys() if (("color" in name) or ("depth" in name) or ("semantic" in name))]
@@ -114,7 +112,7 @@ class TestBase:
 
         while True:
             with th.no_grad():
-                action = policy.predict(obs)
+                action = policy.predict(obs, deterministic=True)
                 if isinstance(action, tuple):
                     action = action[0]
                 # obs, reward, done, info = env.step(action, is_test=True)
@@ -134,6 +132,7 @@ class TestBase:
             self.info_all.append(copy.deepcopy(info))
             self.t.append(env.t.clone())
             if env.visual:
+                # render_kwargs["points"] = env.target
                 render_image = cv2.cvtColor(env.render(**render_kwargs)[0], cv2.COLOR_RGBA2RGB)
                 self.render_image_all.append(render_image)
             # done_all[done] = True
