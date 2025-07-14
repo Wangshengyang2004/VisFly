@@ -89,10 +89,6 @@ def main():
         
         env.reset()
         
-        # Enable individual reward component logging during evaluation only
-        # Training requires tensor returns, evaluation will use dict returns
-        setattr(env, '_enable_individual_rewards', False)
-        
         # Load pretrained model if provided
         if args.weight is not None:
             # Create model first, then load weights

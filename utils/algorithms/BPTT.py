@@ -152,6 +152,9 @@ class BPTT(shac):
                                         eq_len_buffer.append(info[index]["episode"]["l"])
                                         eq_success_buffer.append(info[index]["is_success"])
                                         eq_info_buffer.append(info[index]["episode"])
+                                        if self.eval_env.tensor_output:
+                                            for key, value in self.eval_env._indiv_rewards.items():
+                                                eq_info_buffer[-1]["extra"][key] = value
                                 if done.all():
                                     break
 

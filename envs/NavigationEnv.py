@@ -188,7 +188,7 @@ class NavigationEnv2(DroneGymEnvsBase):
             sensor_kwargs=sensor_kwargs,
             device=device,
             max_episode_steps=max_episode_steps,
-            tensor_output=False
+            tensor_output=tensor_output
         )
         self.max_sense_radius = 10
         # self.target = th.tile(th.as_tensor([14, 0., 1] if target is None else target), (self.num_envs, 1))
