@@ -403,10 +403,15 @@ class ChildrenPathDataset(Dataset):
         Args:
             strings (list): 一个包含字符串的列表.
         """
-        self.root_path = root_path
+        import os
+        # Robust path handling
+        if os.path.isabs(root_path) or root_path.startswith("VisFly/"):
+            self.root_path = root_path
+        else:
+            self.root_path = os.path.join("VisFly/configs", root_path)
         self.type = type
 
-        self.paths = self._load_scene_path(semantic=semantic, root_path=root_path)
+        self.paths = self._load_scene_path(semantic=semantic, root_path=self.root_path)
         if len(self.paths) == 0:
             # try to correct the root path
             # cut the path from "datasets"

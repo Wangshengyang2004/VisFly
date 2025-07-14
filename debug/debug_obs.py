@@ -19,68 +19,91 @@ random_kwargs = {
             ]
         }
 }
-scene_path = "VisFly/datasets/visfly-beta/configs/garage_empty"
-sensor_kwargs = [{
-    "sensor_type": SensorType.DEPTH,  # Changed to DEPTH for consistency
-            "uuid": "depth",
-    "resolution": [64, 64],  # Reduced resolution for testing
-            "position": [0,0.2,0.],
-        }]
-scene_kwargs = {
-    "path": scene_path,
-    "render_settings": {
-        "mode": "fix",
-        "view": "custom",
-        "resolution": [1080, 1920],
-        "position": th.tensor([[7., 6.8, 5.5], [7, 4.8, 4.5]]),
-        "line_width": 6.,
-        "trajectory": True,
+
+# Try to use a simpler scene or disable visual if scene loading fails
+try:
+    scene_path = "VisFly/datasets/visfly-beta/configs/scenes/garage_empty"
+    sensor_kwargs = [{
+        "sensor_type": SensorType.DEPTH,  # Use DEPTH for consistency and testing
+        "uuid": "depth",
+        "resolution": [64, 64],  # Lower resolution for faster testing
+        "position": [0,0.2,0.],
+    }]
+    scene_kwargs = {
+        "path": scene_path,
+        "render_settings": {
+            "mode": "fix",
+            "view": "custom",
+            "resolution": [1080, 1920],
+            "position": th.tensor([[7., 6.8, 5.5], [7, 4.8, 4.5]]),
+            "line_width": 6.,
+            "trajectory": True,
+        }
     }
+    visual = True
+except Exception as e:
+    print(f"Scene loading failed, using non-visual mode: {e}")
+    sensor_kwargs = []
+    scene_kwargs = {}
+    visual = False
+
+# Add proper dynamics_kwargs
+# Use robust settings from fixed_debug_obs.py
+# You can adjust these for testing if needed
+
+dynamics_kwargs = {
+    "action_type": "bodyrate",
+    "ori_output_type": "quaternion",
+    "dt": 0.005,
+    "ctrl_dt": 0.03,
+    "ctrl_delay": True,
+    "comm_delay": 0.09,
+    "action_space": (-1, 1),
+    "integrator": "euler",
+    "drag_random": 0,
 }
 
-try:
 num_agent = 4
 env = NavigationEnv2(
-    visual=True,
+    visual=visual,
     num_scene=1,
     num_agent_per_scene=num_agent,
     random_kwargs=random_kwargs,
+    dynamics_kwargs=dynamics_kwargs,
     scene_kwargs=scene_kwargs,
     sensor_kwargs=sensor_kwargs,
-    dynamics_kwargs={}
 )
 
+print("Environment created successfully!")
 env.reset()
-    print("Environment created and reset successfully!")
+print("Environment reset successfully!")
 
 t = 0
-    max_steps = 50  # Limit steps for testing
-    while t < max_steps:
-    a = th.rand((num_agent, 4))
-    env.step(a)
+max_steps = 50  # Limit the number of steps for testing
+while t < max_steps:
+    try:
+        a = th.rand((num_agent, 4))
+        env.step(a)
         
-        try:
-    img = env.render(is_draw_axes=True)
-            print(f"Step {t}: Position = {env.position[0]}")
-            
-            if "depth" in env.sensor_obs:
-    obs = env.sensor_obs["depth"]
-    cv.imshow("img", img[0])
-    cv.imshow("obs", obs[0][0])
-    cv.waitKey(100)
-        except Exception as e:
-            print(f"Render error at step {t}: {e}")
-            break
-            
+        if visual:
+            img = env.render(is_draw_axes=True)
+            obs = env.sensor_obs["depth"]
+            cv.imshow("img", img[0])
+            cv.imshow("obs", obs[0][0])
+            cv.waitKey(100)
+        
+        print(f"Step {t}: Position = {env.position[0]}")
         t += 1
+    except KeyboardInterrupt:
+        print("Interrupted by user")
+        break
+    except Exception as e:
+        print(f"Error at step {t}: {e}")
+        break
 
+if visual:
     cv.destroyAllWindows()
-    print("Test completed successfully!")
-
-except Exception as e:
-    print(f"Error creating environment: {e}")
-    import traceback
-    traceback.print_exc()
+print("Test completed!")
 
 
 

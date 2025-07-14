@@ -189,7 +189,7 @@ def test_sensor_loading():
             num_scene=1,
             visual=True,
             sensor_kwargs=sensor_kwargs,
-            scene_kwargs={"path": "../datasets/spy_datasets/configs/garage_simple_l_medium"},
+            scene_kwargs={"path": "../datasets/visfly-beta/configs/scenes/garage_empty"},
         )
         
         print("✓ Environment created successfully")

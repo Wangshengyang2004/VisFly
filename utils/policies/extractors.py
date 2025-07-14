@@ -4,7 +4,7 @@ import torch as th
 import torch.nn as nn
 import numpy as np
 from typing import Tuple, Callable, Any
-from gym import spaces
+from gymnasium import spaces
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor, CombinedExtractor
 from typing import List, Optional, Type, Union, Dict
 
@@ -276,8 +276,8 @@ def create_cnn(
         output_channel: Optional[int] = None,
         activation_fn: Type[nn.Module] = nn.ReLU,
         squash_output: bool = False,
-        bn: bool = False,
-        ln: bool = False,
+        batch_norm: bool = False,
+        layer_norm: bool = False,
         bias: bool = True,
         max_pool: int = 0,
         device: th.device = th.device("cpu")
@@ -304,9 +304,9 @@ def create_cnn(
         )
         )
         prev_channel = channel[idx]
-        if bn:
+        if batch_norm:
             modules.append(nn.BatchNorm2d(channel[idx]))
-        if ln:
+        if layer_norm:
             modules.append(ImgChLayerNorm(channel[idx], eps=1e-3))
         modules.append(activation_fn())
         if max_pool > 0:
@@ -483,20 +483,27 @@ def set_cnn_feature_extractor(cls, name, observation_space, net_arch, activation
             activation_fn=activation_fn,
             padding=net_arch.get("padding", [0, 0, 0]),
             stride=net_arch.get("stride", [1, 1, 1]),
-            bn=net_arch.get("bn", False),
-            ln=net_arch.get("ln", False),
+            batch_norm=net_arch.get("bn", False),
+            layer_norm=net_arch.get("ln", False),
             bias=net_arch.get("bias", True),
         )
     modules.append(image_extractor)
     cache_net = nn.Sequential(*modules)
     conv_output = _get_conv_output(cache_net, observation_space.shape)
-    aft_process_layer, _output_dim = create_mlp(
-                                       input_dim=conv_output,
-                                       layer=net_arch.get("layer",[]),
-                                       activation_fn=activation_fn,
-                                       bn=net_arch.get("bn", False),
-                                       ln=net_arch.get("ln", False)
-                                   )
+    aft_process_layer = create_mlp(
+        input_dim=conv_output,
+        layer=net_arch.get("layer",[]),
+        activation_fn=activation_fn,
+        batch_norm=net_arch.get("bn", False),
+        layer_norm=net_arch.get("ln", False)
+    )
+    # Compute output dim of the MLP
+    mlp_layer = net_arch.get("layer", [])
+    if len(mlp_layer) > 0:
+        _output_dim = mlp_layer[-1]
+    else:
+        _output_dim = conv_output
+
     modules.append(aft_process_layer)
 
     net = nn.Sequential(*modules)

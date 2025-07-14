@@ -4,6 +4,7 @@ import sys
 import os
 import time
 import torch
+import torch as th
 import numpy as np
 import traceback
 
@@ -15,11 +16,11 @@ args = rl_parser().parse_args()
 from VisFly.utils.policies import extractors
 from VisFly.utils.algorithms.BPTT import BPTT
 from VisFly.utils import savers
-from VisFly.envs.NavigationEnv import NavigationEnv3
+from VisFly.envs.NavigationEnv import NavigationEnv2
 from VisFly.utils.type import Uniform
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # Disable gradient anomaly detection for physics-based BPTT
-# torch.autograd.set_detect_anomaly(True)  # Commented out for physics compatibility
+# torch.autograd.set_detect_anomaly(True)  # Disabled for stability
 
 """ SAVED HYPERPARAMETERS """
 # Number of parallel environments (agents)
@@ -34,7 +35,9 @@ training_params["max_episode_steps"] = 256
 # Learning rate for BPTT
 training_params["learning_rate"] = 1e-3
 # BPTT horizon
-training_params["horizon"] = 256
+training_params["horizon"] = 96
+# Logging frequency
+training_params["dump_step"] = 50
 
 # Directory where to save checkpoints and logs
 save_folder = os.path.dirname(os.path.abspath(sys.argv[0])) + "/saved/"
@@ -45,10 +48,10 @@ random_kwargs = {
         "class": "Uniform",
         "kwargs": [
             {
-                "position": {"mean": [0., 0., 1.], "half": [8., 8., 1.]},
-                "orientation": {"mean": [0., 0., 0.], "half": [0.0, 0.0, 3.1416]},
-                "velocity": {"mean": [0., 0., 0.], "half": [0.1, 0.1, 0.1]},
-                "angular_velocity": {"mean": [0., 0., 0.], "half": [1., 1., 1.]},
+                "position": {"mean": [3., 0., 1.], "half": [0.5, 0.5, 0.5]},
+                # "orientation": {"mean": [0., 0., 0.], "half": [0.0, 0.0, 3.1416]},
+                # "velocity": {"mean": [0., 0., 0.], "half": [0.1, 0.1, 0.1]},
+                # "angular_velocity": {"mean": [0., 0., 0.], "half": [1., 1., 1.]},
             }
         ]
     }
@@ -61,8 +64,8 @@ scene_kwargs = {
 
 # Dynamics configuration 
 dynamics_kwargs = {
-    "dt": 0.02,
-    "ctrl_dt": 0.02,
+    "dt": 0.03,
+    "ctrl_dt": 0.03,
     "action_type": "bodyrate",
     "ctrl_delay": True,
     "cfg": "drone/drone_d435i",
@@ -71,58 +74,24 @@ dynamics_kwargs = {
 def main():
     # Training mode
     if args.train:
-        # Create NavigationEnv3 with gradients enabled for BPTT and visual=True
-        env = NavigationEnv3(
+        env = NavigationEnv2(
             num_agent_per_scene=int(training_params["num_env"]),
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=scene_kwargs,
-            visual=True,  # Enable visual for depth sensor
+            visual=True, 
             requires_grad=True,
             max_episode_steps=int(training_params["max_episode_steps"]),
+            target=th.tensor([[10., 0., 1.]]),
             device="cpu",
+            tensor_output=True,
         )
-        
-        # Enable individual reward component logging for BPTT training
-        # Note: Individual reward logging is handled in get_reward() method
         
         env.reset()
         
-        # Example of using target validation (uncomment to use)
-        print("Generating valid targets using collision detection...")
-        start_positions = env.position  # Get current agent positions
-        # Above env generated agent positions already
-        valid_targets = env.generate_valid_targets(
-            start_positions=start_positions,
-            num_targets=env.num_envs,
-            min_distance=2.0,
-            max_distance=8.0,
-            max_attempts=50
-        )
-        # Set the valid targets
-        success = env.set_valid_targets(valid_targets)
-        if success:
-            print("Successfully set valid targets using collision detection")
-        else:
-            print("Warning: Some targets are invalid")
-        
-        # Create separate evaluation environment (without gradients for efficiency)
-        print("Creating evaluation environment...")
-        eval_env = NavigationEnv3(
-            num_agent_per_scene=int(training_params["num_env"]),
-            random_kwargs=random_kwargs,
-            dynamics_kwargs=dynamics_kwargs,
-            scene_kwargs=scene_kwargs,
-            visual=True,  # Enable visual for depth sensor
-            requires_grad=False,  # No gradients needed for evaluation
-            max_episode_steps=int(training_params["max_episode_steps"]),
-            device="cpu",
-        )
-        
-        # Enable individual reward component logging for evaluation
-        # Note: Individual reward logging is handled in get_reward() method
-        
-        eval_env.reset()
+        # Enable individual reward component logging during evaluation only
+        # Training requires tensor returns, evaluation will use dict returns
+        setattr(env, '_enable_individual_rewards', False)
         
         # Load pretrained model if provided
         if args.weight is not None:
@@ -131,10 +100,10 @@ def main():
                 env=env,
                 policy="MultiInputPolicy",
                 policy_kwargs=dict(
-                    features_extractor_class=extractors.StateTargetImageExtractor,
+                    features_extractor_class=extractors.StateTargetExtractor,
                     features_extractor_kwargs=dict(
                         net_arch=dict(
-                            depth=dict(layer=[128]),
+                            # depth=dict(layer=[128]),
                             state=dict(layer=[128, 64]),
                             target=dict(layer=[128, 64]),
                         ),
@@ -151,6 +120,7 @@ def main():
                 gamma=training_params.get("gamma", 0.99),
                 device="cuda",
                 seed=int(training_params["seed"]),
+                dump_step=int(training_params.get("dump_step", 1000)),
             )
             model.load(os.path.join(save_folder + args.weight))
         else:
@@ -159,7 +129,7 @@ def main():
                 env=env,
                 policy="MultiInputPolicy",
                 policy_kwargs=dict(
-                    features_extractor_class=extractors.StateTargetImageExtractor,
+                    features_extractor_class=extractors.StateTargetExtractor,
                     features_extractor_kwargs=dict(
                         net_arch=dict(
                             depth=dict(layer=[128]),
@@ -179,10 +149,9 @@ def main():
                 gamma=training_params.get("gamma", 0.99),
                 device="cuda",
                 seed=int(training_params["seed"]),
+                dump_step=int(training_params.get("dump_step", 1000)),
             )
-            
-        model.eval_env = eval_env
-
+        
         # Train
         start_time = time.time()
         model.learn(int(training_params["learning_step"]))
@@ -208,25 +177,28 @@ def main():
         }
         
         from tst import Test
-        env = NavigationEnv3(
+        env = NavigationEnv2(
             num_agent_per_scene=1,
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=test_scene_kwargs,  # Use test scene kwargs with render settings
             visual=True,  # Enable visual for depth sensor
             max_episode_steps=int(training_params["max_episode_steps"]),
+            target=th.tensor([[10., 0., 1.]]),
             device="cpu",
+            tensor_output=True,
         )
         env.reset()
+        
         # Initialize BPTT model for testing
         model = BPTT(
             env=env,
             policy="MultiInputPolicy",
             policy_kwargs=dict(
-                features_extractor_class=extractors.StateTargetImageExtractor,
+                features_extractor_class=extractors.StateTargetExtractor,
                 features_extractor_kwargs=dict(
                     net_arch=dict(
-                        depth=dict(layer=[128]),
+                        # depth=dict(layer=[128]),
                         state=dict(layer=[128, 64]),
                         target=dict(layer=[128, 64]),
                     ),
@@ -249,7 +221,7 @@ def main():
         test_handle = Test(
             env,  # First parameter: env
             wrapped,  # Second parameter: model (with .policy attribute)
-            ["bptt_test"],  # Third parameter: name (as list)
+            "bptt_test",  # Third parameter: name (as string)
             os.path.dirname(os.path.realpath(__file__)) + "/saved/test",  # Fourth parameter: save_path
         )
         # --- Extended evaluation -------------------------------------------------
@@ -298,7 +270,7 @@ def main():
                         figs = list(figs)
                 # Generate debug analysis plots
                 try:
-                    debug_figs = test_handle.draw_debug()
+                    _debug_figs = test_handle.draw_debug()  # Use _ prefix to suppress unused variable warning
                 except Exception as e:
                     print(f"Error during draw_debug: {e}")
                     traceback.print_exc()

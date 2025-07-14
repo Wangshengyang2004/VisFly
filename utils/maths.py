@@ -62,18 +62,21 @@ class Quaternion:
             th.stack([1 - 2 * (self.y.pow(2) + self.z.pow(2)), 2 * (self.x * self.y - self.z * self.w), 2 * (self.x * self.z + self.y * self.w)]),
             th.stack([2 * (self.x * self.y + self.z * self.w), 1 - 2 * (self.x.pow(2) + self.z.pow(2)), 2 * (self.y * self.z - self.x * self.w)]),
             th.stack([2 * (self.x * self.z - self.y * self.w), 2 * (self.y * self.z + self.x * self.w), 1 - 2 * (self.x.pow(2) + self.y.pow(2))])
-        ])
+        ]).clone()
 
     @property
     def x_axis(self):
-        return th.stack([1 - 2 * (self.y.pow(2) + self.z.pow(2)), 2 * (self.x * self.y + self.z * self.w), 2 * (self.x * self.z - self.y * self.w)])
+        x_axis = th.stack([1 - 2 * (self.y.clone() * self.y.clone() + self.z.clone() * self.z.clone()),
+                           2 * (self.x.clone() * self.y.clone() - self.z.clone() * self.w.clone()),
+                           2 * (self.x.clone() * self.z.clone() + self.y.clone() * self.w.clone())])
+        return x_axis
 
     @property
     def xz_axis(self):
         return th.stack([
             th.stack([1 - 2 * (self.y.pow(2) + self.z.pow(2)), 2 * (self.x * self.y - self.z * self.w), 2 * (self.x * self.z + self.y * self.w)]),
             th.stack([2 * (self.x * self.z + self.y * self.w), 2 * (self.y * self.z - self.x * self.w), 1 - 2 * (self.x.pow(2) + self.y.pow(2))])
-        ])
+        ]).clone()
 
     @property
     def shape(self):
@@ -253,16 +256,16 @@ class Integrator:
             d_pos, d_ori, d_vel, d_ori_vel = Integrator._get_derivatives(
                 vel=vel_cache,
                 ori=ori_cache,
-                acc=acc,
                 ori_vel=ori_vel_cache,
+                acc=acc,
                 tau=tau,
                 J=J,
                 J_inv=J_inv
             )
-            pos += d_pos * dt
-            ori += d_ori * dt
-            vel += d_vel * dt
-            ori_vel += d_ori_vel * dt
+            pos = pos + d_pos * dt
+            ori = ori + d_ori * dt
+            vel = vel + d_vel * dt
+            ori_vel = ori_vel + d_ori_vel * dt
 
             # ori = ori / ori.norm()
 
@@ -296,10 +299,10 @@ class Integrator:
                         J_inv=J_inv
                     )
             # f"w_cache: {ori_vel_cache} quat:{ori_cache} d_ori:{d_ori[:,:,index]}"
-            pos += d_pos @ ks * dt
-            ori += d_ori @ ks * dt
-            vel += d_vel @ ks * dt
-            ori_vel += d_ori_vel @ ks * dt
+            pos = pos + d_pos @ ks * dt
+            ori = ori + d_ori @ ks * dt
+            vel = vel + d_vel @ ks * dt
+            ori_vel = ori_vel + d_ori_vel @ ks * dt
 
             return pos, ori, vel, ori_vel, d_ori_vel
 

@@ -84,7 +84,15 @@ class Dynamics:
         self._drag_random = drag_random
 
     def _init(self, cfg):
-        self.load(os.path.dirname(__file__) + f"/../../configs/drone/{cfg}.json")
+        # If cfg already ends with .json, remove it for consistency
+        if cfg.endswith('.json'):
+            cfg = cfg[:-5]
+        # If cfg contains a path separator, treat as relative to configs
+        if "/" in cfg or "\\" in cfg:
+            config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../configs", cfg + ".json"))
+        else:
+            config_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../configs/drone", cfg + ".json"))
+        self.load(config_path)
         motor_direction = th.tensor([
             [1, -1, -1, 1, ],
             [-1, -1, 1, 1],

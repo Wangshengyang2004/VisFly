@@ -124,8 +124,10 @@ class TemporalDifferBase:
             self.env.requires_grad = True
             # self.eval_env = self.env
 
-        except:
-            print("Evaluation env will not be created.")
+        except Exception as e:
+            print(f"Error building evaluation environment: {e}")
+            self.eval_env = self.env
+
 
         self.actor = self.policy.actor
         self.critic = self.policy.critic
@@ -185,6 +187,7 @@ class TemporalDifferBase:
             self,
             total_timesteps: int,
     ):
+        print("[DEBUG] Entered shac.learn() method - starting training")
         # assert self.H >= 1, "horizon must be greater than 1"
         self.policy.train()
         self._logger = self._create_logger(**self.logger_kwargs)
@@ -263,6 +266,9 @@ class TemporalDifferBase:
                     self.policy.actor.optimizer.step()
                     self.rollout_buffer.compute_returns()
                     self.env.detach()
+
+                    # Print rollout buffer sizes for memory monitoring
+                    print(f"[DEBUG] Rollout buffer sizes: obs={len(self.rollout_buffer.obs)}, reward={len(self.rollout_buffer.reward)}, action={len(self.rollout_buffer.action)}, next_obs={len(self.rollout_buffer.next_obs)}, done={len(self.rollout_buffer.done)}")
 
                     # update critic
                     for i in range(self.gradient_steps):

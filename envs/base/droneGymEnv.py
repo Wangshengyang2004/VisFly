@@ -214,7 +214,8 @@ class DroneGymEnvsBase(VecEnv):
         if self._done.any() and not is_test:
             self.examine()
         if self.requires_grad:
-            # analytical gradient RL
+            # analytical gradient RL: ensure reward tensor requires grad
+            _reward = _reward.requires_grad_()
             return self._observations, _reward, _done, _info
         else:
             if self.tensor_output:
@@ -345,7 +346,7 @@ class DroneGymEnvsBase(VecEnv):
         if not self.tensor_output:
             return obs.detach().cpu().numpy()
         else:
-            return obs
+            return obs.detach()
 
     @th.no_grad()
     def _reset_attr(self, indices=None):

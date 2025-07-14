@@ -19,11 +19,11 @@ class HoverEnv(DroneGymEnvsBase):
             seed: int = 42,
             visual: bool = True,
             requires_grad: bool = False,
-            random_kwargs: dict = None,
+            random_kwargs: dict = {},
             dynamics_kwargs: dict = {},
             scene_kwargs: dict = {},
             sensor_kwargs: list = [],
-            device: str = "cpu",
+            device: Optional[th.device] = th.device("cpu"),
             target: Optional[th.Tensor] = None,
             max_episode_steps: int = 256,
             tensor_output: bool = False,
@@ -106,7 +106,7 @@ class HoverEnv2(HoverEnv):
             dynamics_kwargs: dict = {},
             scene_kwargs: dict = {},
             sensor_kwargs: list = [],
-            device: str = "cpu",
+            device: Optional[th.device] = th.device("cpu"),
             target: Optional[th.Tensor] = None,
             max_episode_steps: int = 256,
             tensor_output: bool = False,
@@ -132,6 +132,84 @@ class HoverEnv2(HoverEnv):
             tensor_output=tensor_output,
         )
 
+    def validate_target_position(self, target_positions: th.Tensor) -> th.Tensor:
+        """
+        Validate if target positions are reasonable (not in obstacles or out of bounds)
+        
+        Args:
+            target_positions: Tensor of shape (num_envs, 3) with target positions
+            
+        Returns:
+            Boolean tensor indicating valid targets (True = valid, False = invalid)
+        """
+        # Use the existing collision detection function from SceneManager
+        invalid_targets = self.envs.sceneManager.get_point_is_collision(
+            std_positions=target_positions,
+            scene_id=0,  # Assuming single scene
+            uav_radius=getattr(self, 'uav_radius', 0.3)  # Use drone radius for collision checking
+        )
+        
+        # Return valid targets (invert the result) and convert to tensor
+        return th.tensor(~invalid_targets, device=self.device)
+
+    def generate_valid_targets(self, start_positions: th.Tensor, num_targets: int = 1, 
+                             min_distance: float = 2.0, max_distance: float = 8.0,
+                             max_attempts: int = 100) -> th.Tensor:
+        """
+        Generate targets that are valid (not in obstacles or out of bounds)
+        
+        Args:
+            start_positions: Tensor of shape (num_envs, 3) with starting positions
+            num_targets: Number of targets to generate
+            min_distance: Minimum distance from start position
+            max_distance: Maximum distance from start position
+            max_attempts: Maximum attempts to find valid targets
+            
+        Returns:
+            Tensor of shape (num_envs, 3) with valid target positions
+        """
+        targets = th.zeros((num_targets, 3), device=self.device)
+        
+        for attempt in range(max_attempts):
+            # Generate random targets
+            angle = th.rand(num_targets, device=self.device) * 2 * th.pi
+            distance = min_distance + (max_distance - min_distance) * th.rand(num_targets, device=self.device)
+            
+            target_x = start_positions[:, 0] + distance * th.cos(angle)
+            target_y = start_positions[:, 1] + distance * th.sin(angle)
+            target_z = th.ones(num_targets, device=self.device) * 1.0
+            
+            candidate_targets = th.stack([target_x, target_y, target_z], dim=1)
+            
+            # Validate targets
+            valid_targets = self.validate_target_position(candidate_targets)
+            
+            if valid_targets.all():
+                return candidate_targets
+        
+        # If max attempts reached, return the last generated targets
+        print(f"Warning: Could not find valid targets after {max_attempts} attempts")
+        return candidate_targets
+
+    def set_valid_targets(self, new_targets: th.Tensor) -> bool:
+        """
+        Set new targets only if they are valid
+        
+        Args:
+            new_targets: Tensor of shape (num_envs, 3) with new target positions
+            
+        Returns:
+            Boolean indicating if all targets are valid
+        """
+        valid_targets = self.validate_target_position(new_targets)
+        
+        if valid_targets.all():
+            self.target = new_targets.to(self.device)
+            return True
+        else:
+            print(f"Warning: {valid_targets.sum().item()} out of {len(valid_targets)} targets are invalid")
+            return False
+
     def get_observation(
             self,
             indices=None
@@ -144,9 +222,19 @@ class HoverEnv2(HoverEnv):
             self.angular_velocity / 10,
         ]).to(self.device)
 
+        # Add depth sensor observation if visual is enabled and depth data is available
+        if self.visual and "depth" in self.sensor_obs:
+            depth = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
+            # Normalize depth to [0, 1] range
+            depth = (depth / 10).clamp(max=1)
+        else:
+            # Provide zero depth if no sensor data available
+            depth = th.zeros((self.num_envs, 1, 64, 64), device=self.device)
+
         return TensorDict({
             "state": state,
-            "depth": th.as_tensor(self.sensor_obs["depth"]/10).clamp(max=1)
+            "depth": depth,
+            "target": self.target.to(self.device),
         })
 
 

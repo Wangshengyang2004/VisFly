@@ -60,6 +60,7 @@ def transfer_schedule(learning_rate: Union[dict, float]) -> Callable[[float], fl
         schedule_class = class_alias[learning_rate['class']]
         return schedule_class(**learning_rate['kwargs'])
     elif isinstance(learning_rate, (int, float)):
-        return learning_rate
+        # wrap scalar LR into a linear decay schedule to zero
+        return linear_schedule(initial=float(learning_rate), final=0.0)
     else:
         raise ValueError(f"Invalid learning rate type: {type(learning_rate)}")

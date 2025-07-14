@@ -54,7 +54,7 @@ class Test(TestBase):
         h, w = frames[0].shape[:2]
         fps = int(1.0 / self.env.envs.dynamics.dt)
         path = os.path.join(episode_dir, "combined_video.mp4")
-        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
         for f in frames:
             writer.write(f)
         writer.release()
@@ -71,7 +71,7 @@ class Test(TestBase):
         h, w, _ = self.render_image_all[0].shape
         fps = int(1.0 / self.env.envs.dynamics.dt)
         path = os.path.join(episode_dir, "global_camera.mp4")
-        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
+        writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'avc1'), fps, (w, h))
         for img in self.render_image_all:
             writer.write(cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
         writer.release()
@@ -83,7 +83,7 @@ class Test(TestBase):
         depth_seq = [o["depth"].cpu().numpy() if hasattr(o["depth"], "cpu") else o["depth"].numpy() for o in self.obs_all]
         num_agents = depth_seq[0].shape[0]
         fps = int(1.0 / self.env.envs.dynamics.dt)
-        writers = {i: cv2.VideoWriter(os.path.join(episode_dir, f"agent_{i}_depth.mp4"), cv2.VideoWriter_fourcc(*'mp4v'), fps, (200, 200)) for i in range(num_agents)}
+        writers = {i: cv2.VideoWriter(os.path.join(episode_dir, f"agent_{i}_depth.mp4"), cv2.VideoWriter_fourcc(*'avc1'), fps, (200, 200)) for i in range(num_agents)}
         for depth in depth_seq:
             for i in range(num_agents):
                 d = depth[i, 0]

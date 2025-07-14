@@ -1,45 +1,48 @@
 algorithm:
-  policy: MultiInputPolicy
+  policy: CustomMultiInputPolicy
   policy_kwargs:
-    features_extractor_class: StateExtractor
+    features_extractor_class: StateTargetImageExtractor
     features_extractor_kwargs:
       net_arch:
-        state:
-          layer: [192]
+        depth: [128]
+        state: [128, 64]
+        target: [128, 64]
 
     net_arch:
-      pi: [192, 96]
-      qf: [192, 96]
+      pi: [64, 64]
+      qf: [64, 64]
     activation_fn: relu
     optimizer_kwargs:
       weight_decay: 0.00001
     share_features_extractor: False
-  learning_rate: 0.001
+  learning_rate:
+    class: exponential
+    kwargs:
+      initial: 0.0005
+      decay: 0.01
   horizon: 256
   tau: 0.005
   gamma: 0.99
   device: cuda
-  batch_size: 10000
 
 env:
-  num_agent_per_scene: 100
-  max_episode_steps: 256
+  num_agent_per_scene: 150
+  max_episode_steps: 512
   scene_kwargs:
-    path: VisFly/datasets/visfly-beta/configs/scenes/garage_empty
+    path: VisFly/datasets/visfly-beta/configs/scenes/box15_wall_pillar
   visual: True
   device: cpu
-  tensor_output: True
 
 learn:
-  total_timesteps: 4000000
+  total_timesteps: 10000000
 
 eval_env:
   num_agent_per_scene: 1
-  max_episode_steps: 256
+  max_episode_steps: 512
   visual: True
   sensor_kwargs: []
   scene_kwargs:
-    path: VisFly/datasets/visfly-beta/configs/scenes/garage_empty
+    path: VisFly/datasets/visfly-beta/configs/scenes/box15_wall_pillar
     render_settings:
       mode: fix
       view: custom
@@ -54,5 +57,4 @@ test:
   is_video: True
   is_video_save: True
   render_kwargs: {}
-
 

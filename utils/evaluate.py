@@ -90,9 +90,8 @@ class TestBase:
         if is_fig_save:
             if not is_fig:
                 raise ValueError("is_fig_save must be True if is_fig is True")
-        if is_video_save:
-            if not is_video:
-                raise ValueError("is_video_save must be True if is_video is True")
+        # Remove the validation that requires is_video=True when is_video_save=True
+        # This allows video saving without interactive playback (useful for remote servers)
         if policy is None:
             policy = self.model.policy
         if self.env is not None:
@@ -159,10 +158,23 @@ class TestBase:
                     self.save_fig(fig, c=i)
         else:
             figs = []
+        
+        # Handle video generation more gracefully on remote servers
+        # Interactive video playback (requires display)
         if is_video:
-            self.play(is_sub_video=is_sub_video)
-            if is_video_save:
+            try:
+                self.play(is_sub_video=is_sub_video)
+            except Exception as e:
+                print(f"Could not play video interactively (remote server without display): {e}")
+                print("Video will be saved to file instead.")
+        
+        # Video saving (works without display)
+        if is_video_save:
+            try:
                 self.save_video()
+            except Exception as e:
+                print(f"Error saving video: {e}")
+                print("Video generation failed, but plots have been saved.")
 
         render_video = th.as_tensor(np.stack(self.render_image_all, axis=0)).unsqueeze(0) if len(self.render_image_all) > 0 else None
         return figs, render_video, mean_r, mean_l
@@ -181,22 +193,26 @@ class TestBase:
         """
         how to draw the figures
         """
-        for image, t, obs in zip(self.render_image_all, self.t, self.obs_all):
-            image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
-            cv2.imshow(winname=render_name, mat=image)
-            if is_sub_video:
-                for name in self._img_names:
-                    # Convert CUDA tensor to CPU before numpy operations
-                    obs_data = obs[name]
-                    if hasattr(obs_data, 'cpu'):
-                        obs_data = obs_data.cpu()
-                    if hasattr(obs_data, 'numpy'):
-                        obs_data = obs_data.numpy()
-                    
-                    cv2.imshow(winname=name,
-                               mat=np.hstack(np.transpose(obs_data, (0,2,3,1) ))
-                               )
-            cv2.waitKey(int(self.env.envs.dynamics.ctrl_dt * 1000))
+        try:
+            for image, t, obs in zip(self.render_image_all, self.t, self.obs_all):
+                image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+                cv2.imshow(winname=render_name, mat=image)
+                if is_sub_video:
+                    for name in self._img_names:
+                        # Convert CUDA tensor to CPU before numpy operations
+                        obs_data = obs[name]
+                        if hasattr(obs_data, 'cpu'):
+                            obs_data = obs_data.cpu()
+                        if hasattr(obs_data, 'numpy'):
+                            obs_data = obs_data.numpy()
+                        
+                        cv2.imshow(winname=name,
+                                   mat=np.hstack(np.transpose(obs_data, (0,2,3,1) ))
+                                   )
+                cv2.waitKey(int(self.env.envs.dynamics.ctrl_dt * 1000))
+        except Exception as e:
+            print(f"Could not display video interactively: {e}")
+            print("Video will be saved to file instead.")
 
     def save_fig(self, fig, path=None, c=""):
         path = path if path is not None else self.save_path
@@ -217,7 +233,7 @@ class TestBase:
 
         # render video
         path = f"{self.save_path}/video.mp4"
-        video = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'mp4v'), int(1/self.env.envs.dynamics.dt), (width, height))
+        video = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*'avc1'), int(1/self.env.envs.dynamics.dt), (width, height))
         # obs video
         path_obs = []
         video_obs = []
@@ -225,7 +241,7 @@ class TestBase:
             for name in self._img_names:
                 path_obs.append(f"{self.save_path}/{name}.mp4")
                 width, height = self.obs_all[0][name].shape[3]*self.obs_all[0][name].shape[0], self.obs_all[0][name].shape[2]
-                video_obs.append(cv2.VideoWriter(path_obs[-1], cv2.VideoWriter_fourcc(*'mp4v'), int(1/self.env.dynamics.dt), (width, height)))
+                video_obs.append(cv2.VideoWriter(path_obs[-1], cv2.VideoWriter_fourcc(*'avc1'), int(1/self.env.dynamics.dt), (width, height)))
 
         # 将图片写入视频
         for index, (image, t, obs) in enumerate(zip(self.render_image_all, self.t, self.obs_all)):
