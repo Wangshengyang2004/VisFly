@@ -1,13 +1,3 @@
-#!/usr/bin/env python3
-
-"""BPTT training entry-point for the cluttered_flight_old scenario.
-
-This mirrors `examples/navigation3/bptt.py`, but re-uses the random
-initialisation and scene used by the PPO example in the same folder.
-The script trains with the differentiable dynamics (requires_grad=True)
-so that gradients can flow through the environment.
-"""
-
 import os
 import sys
 import time
@@ -51,7 +41,7 @@ training_params.update({
 save_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved")
 
 # ----------------------- Environment set-up ---------------------------------
-scene_path = "VisFly/datasets/spy_datasets/configs/garage_simple_l_medium"
+scene_path = "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 
 random_kwargs = {
     "state_generator": {

@@ -42,12 +42,12 @@ class NoActorContinuousCritic(NormalContinuousCritic):
         )
         self.q_networks = []
         for idx in range(n_critics):
-            net, _ = create_mlp(input_dim=features_dim,
-                             output_dim=1,
-                             activation_fn=activation_fn,
-                             layer=net_arch,
-                             bn=bn,
-                             ln=ln,
+            net = create_mlp(input_dim=features_dim,
+                         output_dim=1,
+                         activation_fn=activation_fn,
+                         layer=net_arch,
+                         bn=bn,
+                         ln=ln,
             )
             q_net = net
             self.add_module(f"qf{idx}", q_net)

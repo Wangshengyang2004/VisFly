@@ -72,6 +72,7 @@ class TestBase:
         self.collision_all = []
         self.render_image_all = []
         self.reward_all = []
+        self.reward_components = []  # Store detailed reward components
         self.t = []
 
     def test(
@@ -112,7 +113,7 @@ class TestBase:
 
         while True:
             with th.no_grad():
-                action = policy.predict(obs, deterministic=True)
+                action = policy.predict(obs, deterministic=False)
                 if isinstance(action, tuple):
                     action = action[0]
                 # obs, reward, done, info = env.step(action, is_test=True)
@@ -126,13 +127,19 @@ class TestBase:
                 self.collision_all.append({"col_dis": col_dis, "is_col": is_col, "col_pt": col_pt})
 
             self.reward_all.append(reward)
+            # Store detailed reward components if available from environment's _indiv_reward
+            if hasattr(env, '_indiv_reward') and env._indiv_reward is not None and isinstance(env._indiv_reward, dict):
+                self.reward_components.append(env._indiv_reward.copy())
             self.action_all.append(action)
             self.state_all.append(state)
             self.obs_all.append(obs)
             self.info_all.append(copy.deepcopy(info))
             self.t.append(env.t.clone())
             if env.visual:
-                # render_kwargs["points"] = env.target
+                # Add target points to render_kwargs for visualization during test mode
+                if hasattr(env, 'target') and env.target is not None:
+                    target_points = env.target.cpu() if hasattr(env.target, 'cpu') else env.target
+                    render_kwargs["points"] = target_points
                 render_image = cv2.cvtColor(env.render(**render_kwargs)[0], cv2.COLOR_RGBA2RGB)
                 self.render_image_all.append(render_image)
             # done_all[done] = True
@@ -176,7 +183,40 @@ class TestBase:
                 print("Video generation failed, but plots have been saved.")
 
         render_video = th.as_tensor(np.stack(self.render_image_all, axis=0)).unsqueeze(0) if len(self.render_image_all) > 0 else None
+        
+        # Print reward component statistics if available
+        if self.reward_components:
+            self.print_reward_statistics()
+        
         return figs, render_video, mean_r, mean_l
+
+    def print_reward_statistics(self):
+        """Print aggregated reward component statistics similar to training output."""
+        if not self.reward_components:
+            return
+        
+        print("------------------------------------------------")
+        print("| Evaluation Reward Components              |          |")
+        print("------------------------------------------------")
+        
+        # Aggregate all reward components across timesteps
+        aggregated = {}
+        for reward_dict in self.reward_components:
+            for key, value in reward_dict.items():
+                if key not in aggregated:
+                    aggregated[key] = []
+                if isinstance(value, th.Tensor):
+                    aggregated[key].append(value.cpu().numpy())
+                else:
+                    aggregated[key].append(value)
+        
+        # Compute mean for each component
+        for key, values in aggregated.items():
+            if values:
+                mean_val = np.mean(values)
+                print(f"|    {key:<30} | {mean_val:<8.3g} |")
+        
+        print("------------------------------------------------")
 
 
 

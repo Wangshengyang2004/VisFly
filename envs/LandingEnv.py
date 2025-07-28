@@ -113,7 +113,7 @@ class LandingEnv(DroneGymEnvsBase):
                 0.1 * (3 - self.position[:, 2]).clamp(0, 3) / 3 * 2 + \
                 -0.02 * self.velocity.norm(dim=1) + \
                 -0.01 * self.angular_velocity.norm(dim=1) + \
-                0.1 * 20 * self._success * (10 + (th.tensor(self.max_episode_steps, device=self.device) - th.tensor(self._step_count, device=self.device))) / (1 + 2 * self.velocity.norm(dim=1))  # / (self.velocity.norm(dim=1) + 1)
+                0.1 * 20 * self._success * (10 + (th.tensor(self.max_episode_steps, device=self.device).clone().detach() - th.tensor(self._step_count, device=self.device).clone().detach())) / (1 + 2 * self.velocity.norm(dim=1))  # / (self.velocity.norm(dim=1) + 1)
 
         return reward
 

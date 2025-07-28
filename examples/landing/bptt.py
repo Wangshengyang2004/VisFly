@@ -37,7 +37,7 @@ training_params["horizon"] = training_params["max_episode_steps"]
 save_folder = os.path.dirname(os.path.abspath(sys.argv[0])) + "/saved/"
 
 # Scene configuration
-scene_path = "VisFly/datasets/visfly-beta/configs/garage_landing"
+scene_path = "VisFly/datasets/visfly-beta/configs/scenes/garage_landing"
 
 # Random initialization for environment resets
 random_kwargs = {
@@ -108,7 +108,7 @@ def main():
                     },
                     net_arch=dict(
                         pi=[64, 64],
-                        vf=[64, 64]),
+                        qf=[64, 64]),
                     activation_fn=torch.nn.ReLU,
                     optimizer_kwargs=dict(weight_decay=1e-5)
                 ),

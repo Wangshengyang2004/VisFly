@@ -909,9 +909,15 @@ class SceneManager(ABC):
             sensor_spec.resolution = sensor_cfg.get("resolution", [128, 128])
             sensor_spec.orientation = mn.Vector3(sensor_cfg.get("orientation", [0., 0, 0]))
             sensor_spec.position = mn.Vector3(sensor_cfg.get("position", [0, 0, -0.2]))
-            if type(sensor_cfg.get("sensor_type", habitat_sim.SensorType.COLOR)) != habitat_sim._ext.habitat_sim_bindings.SensorType:
-                continue
-            sensor_spec.sensor_type = sensor_cfg.get("sensor_type", habitat_sim.SensorType.COLOR)
+            sensor_type = sensor_cfg.get("sensor_type", habitat_sim.SensorType.COLOR)
+            # Allow both SensorType enum and direct values
+            if hasattr(sensor_type, 'value'):
+                sensor_spec.sensor_type = sensor_type
+            elif isinstance(sensor_type, int):
+                sensor_spec.sensor_type = habitat_sim.SensorType(sensor_type)
+            else:
+                # Assume it's already a valid SensorType
+                sensor_spec.sensor_type = sensor_type
             if self.noise_settings is not None:
                 if sensor_spec.uuid in self.noise_settings.keys():
                     sensor_spec.noise_model = self.noise_settings[sensor_spec.uuid].get("model", "None")

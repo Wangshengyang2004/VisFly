@@ -7,7 +7,7 @@ from mpl_toolkits.mplot3d import Axes3D
 from typing import Optional
 import os, sys
 import cv2
-
+sys.path.append(os.getcwd())
 from VisFly.utils.evaluate import TestBase
 from VisFly.utils.FigFashion.FigFashion import FigFon
 

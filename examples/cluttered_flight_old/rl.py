@@ -34,7 +34,7 @@ training_params["learning_rate"] = 1e-3
 training_params["n_epochs"] = 5
 save_folder = os.path.dirname(os.path.abspath(sys.argv[0])) + "/saved/"
 
-scene_path = "VisFly/datasets/spy_datasets/configs/garage_simple_l_medium"
+scene_path = "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 
 random_kwargs = {
     "state_generator":

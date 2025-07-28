@@ -79,8 +79,8 @@ class Quaternion:
     @property
     def xz_axis(self):
         return th.stack([
-            th.stack([1 - 2 * (self.y.pow(2) + self.z.pow(2)), 2 * (self.x * self.y - self.z * self.w), 2 * (self.x * self.z + self.y * self.w)]),
-            th.stack([2 * (self.x * self.z + self.y * self.w), 2 * (self.y * self.z - self.x * self.w), 1 - 2 * (self.x.pow(2) + self.y.pow(2))])
+            th.stack([1 - 2 * (self.y.clone() * self.y.clone() + self.z.clone() * self.z.clone()), 2 * (self.x.clone() * self.y.clone() - self.z.clone() * self.w.clone()), 2 * (self.x.clone() * self.z.clone() + self.y.clone() * self.w.clone())]),
+            th.stack([2 * (self.x.clone() * self.z.clone() + self.y.clone() * self.w.clone()), 2 * (self.y.clone() * self.z.clone() - self.x.clone() * self.w.clone()), 1 - 2 * (self.x.clone() * self.x.clone() + self.y.clone() * self.y.clone())])
         ]).clone()
 
     @property

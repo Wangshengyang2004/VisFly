@@ -111,8 +111,8 @@ class ContinuousCritic(NormalContinuousCritic):
                              output_dim=1,
                              activation_fn=activation_fn,
                              layer=net_arch,
-                             batch_norm=bn,
-                             layer_norm=ln,
+                             bn=bn,
+                             ln=ln,
             )
             self.add_module(f"qf{idx}", q_net)
             self.q_networks.append(q_net)
@@ -192,7 +192,7 @@ class Actor(SAC_Actor):
         self._squash_output = squash_output
         # Deterministic action
         self.deterministic = deterministic
-        self.latent_pi = create_mlp(input_dim=features_dim, layer=net_arch, activation_fn=activation_fn, squash_output=False, batch_norm=bn, layer_norm=ln)
+        self.latent_pi = create_mlp(input_dim=features_dim, layer=net_arch, activation_fn=activation_fn, squash_output=False, bn=bn, ln=ln)
         # self.latent_pi = nn.Flatten()
         self.log_latent_pi = copy.deepcopy(self.latent_pi)
         # self.mu = create_mlp(input_dim=features_dim, layer=net_arch, activation_fn=activation_fn, output_dim=self.action_space.shape[0], squash_output=False)

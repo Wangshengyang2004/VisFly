@@ -101,12 +101,24 @@ class BPTT(shac):
 
                     actor_loss, critic_loss = 0., 0.  # th.tensor(0, device=self.device), th.tensor(0, device=self.device)
                     obs = self.env.get_observation()
+                    if hasattr(obs, 'clone') and hasattr(obs, 'detach'):
+                        # TensorDict type
+                        obs = obs.detach()
+                    elif isinstance(obs, np.ndarray):
+                        obs = th.from_numpy(obs).float().to(self.device)
 
                     discount_factor = th.ones((self.num_envs,), dtype=th.float32, device=self.device)
 
                     for inner_step in range(self.H):
                         # dream a horizon of experience
                         obs = self.env.get_observation()
+                        if hasattr(obs, 'clone') and hasattr(obs, 'detach'):
+                            # TensorDict type
+                            obs = obs.detach()
+                        elif isinstance(obs, np.ndarray):
+                            obs = th.from_numpy(obs).float().to(self.device)
+                        else:
+                            obs = obs.clone().detach()
                         pre_obs = obs
                         # iteration
                         actions, _, h = self.policy.actor.action_log_prob(obs)
@@ -121,7 +133,7 @@ class BPTT(shac):
 
                         # compute the loss
                         actor_loss += -1 * reward * discount_factor
-                        discount_factor = discount_factor * self.gamma * ~done + done
+                        discount_factor = discount_factor * self.gamma * (~done) + done
 
                     # update
                     actor_loss = (actor_loss).mean()
@@ -168,12 +180,30 @@ class BPTT(shac):
                         # Individual reward components
                         if len(eq_info_buffer[0]["extra"]) >= 0 and self.eval_env.tensor_output:
                             for key in eq_info_buffer[0]["extra"].keys():
-                                self._logger.record(
-                                    f"rollout/ep_{key}_mean",
-                                    safe_mean(
-                                        [ep_info["extra"][key] for ep_info in eq_info_buffer]
-                                    ),
-                                )
+                                values = [ep_info["extra"][key] for ep_info in eq_info_buffer]
+                                
+                                # Fix distance metrics - divide by episode length to get proper averages
+                                if key == "dis_to_target":
+                                    # Convert accumulated distance to mean distance per episode
+                                    ep_lengths = [ep_info.get("l", 1) for ep_info in eq_info_buffer]
+                                    corrected_values = [val / max(length, 1) for val, length in zip(values, ep_lengths)]
+                                    self._logger.record(
+                                        f"rollout/ep_{key}_mean",
+                                        safe_mean(corrected_values),
+                                    )
+                                elif key == "min_dis_to_target":
+                                    # Convert accumulated minimum distances to proper episode minimums
+                                    ep_lengths = [ep_info.get("l", 1) for ep_info in eq_info_buffer]
+                                    corrected_values = [val / max(length, 1) for val, length in zip(values, ep_lengths)]
+                                    self._logger.record(
+                                        f"rollout/ep_{key}_mean",
+                                        safe_mean(corrected_values),
+                                    )
+                                else:
+                                    self._logger.record(
+                                        f"rollout/ep_{key}_mean",
+                                        safe_mean(values),
+                                    )
                         else:
                             self._logger.record(
                                 "rollout/ep_rew_mean",

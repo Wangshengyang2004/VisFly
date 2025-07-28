@@ -107,8 +107,18 @@ class TensorDict(dict):
         return TensorDict({key: self[key].detach() for key in self.keys()})
 
     def clone(self):
+        import torch as th
+        import numpy as np
         for key in self.keys():
-            self[key] = self[key].clone()
+            if hasattr(self[key], 'clone'):
+                # PyTorch tensor
+                self[key] = self[key].clone()
+            elif isinstance(self[key], np.ndarray):
+                # Numpy array - convert to tensor and clone
+                self[key] = th.from_numpy(self[key].copy())
+            else:
+                # Other types - just copy
+                self[key] = self[key]
 
         return self
 

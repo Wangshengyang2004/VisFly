@@ -128,6 +128,7 @@ class DroneGymEnvsBase(VecEnv):
         self._indiv_rewards = None
         self._indiv_reward = None
         self.max_episode_steps = max_episode_steps
+        
 
         # necessary for gym compatibility
         self.render_mode = ["None" for _ in range(self.num_agent)]
@@ -250,7 +251,11 @@ class DroneGymEnvsBase(VecEnv):
 
         if self._indiv_rewards is not None:
             for key in self._indiv_rewards.keys():
-                _info["episode"]["extra"][key] = self._indiv_rewards[key][indice].clone().detach()
+                # Defensive check to ensure tensor has correct dimensions
+                if hasattr(self._indiv_rewards[key], 'shape') and len(self._indiv_rewards[key].shape) > 0 and self._indiv_rewards[key].shape[0] > indice:
+                    _info["episode"]["extra"][key] = self._indiv_rewards[key][indice].clone().detach()
+                else:
+                    _info["episode"]["extra"][key] = th.tensor(0.0)  # Fallback value
 
         return _info
 
@@ -289,6 +294,7 @@ class DroneGymEnvsBase(VecEnv):
             self._indiv_rewards: dict = self._indiv_reward
             self._indiv_rewards = {key: th.zeros((self.num_agent,)) for key in self._indiv_rewards.keys()}
             self._indiv_reward = {key: th.zeros((self.num_agent,)) for key in self._indiv_rewards.keys()}
+            
         elif isinstance(self.get_reward(), th.Tensor):
             self._indiv_rewards = None
             self._indiv_reward = None
@@ -387,8 +393,25 @@ class DroneGymEnvsBase(VecEnv):
                                                                  deterministic=False)
                     self.deter[indices], self.stoch[indices] = next_deter.to(self.device), next_stoch_post.to(self.device)
                 else:
-                    self._indiv_rewards[key][indices] = 0
-                    self._indiv_reward[key][indices] = 0
+                    self.deter[indices] = th.zeros_like(self.deter[indices], device=self.device)
+                    self.stoch[indices] = th.zeros_like(self.stoch[indices], device=self.device)
+            
+            if self._indiv_rewards is not None:
+                for key in self._indiv_rewards.keys():
+                    # Debug tensor shapes to understand the issue
+                    if hasattr(self._indiv_rewards[key], 'shape') and hasattr(self._indiv_reward[key], 'shape'):
+                        if len(self._indiv_rewards[key].shape) > 0 and len(self._indiv_reward[key].shape) > 0:
+                            self._indiv_rewards[key][indices] = 0
+                            self._indiv_reward[key][indices] = 0
+                        else:
+                            # Tensor got corrupted somehow, reinitialize
+                            self._indiv_rewards[key] = th.zeros((self.num_agent,), device=self.device)
+                            self._indiv_reward[key] = th.zeros((self.num_agent,), device=self.device)
+                    else:
+                        # Not a tensor, reinitialize
+                        self._indiv_rewards[key] = th.zeros((self.num_agent,), device=self.device)
+                        self._indiv_reward[key] = th.zeros((self.num_agent,), device=self.device)
+                
 
         indices = range(self.num_agent) if indices is None else indices
         for indice in indices:

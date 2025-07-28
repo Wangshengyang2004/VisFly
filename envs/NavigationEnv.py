@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 from habitat_sim.sensor import SensorType
 
@@ -9,10 +7,9 @@ import torch as th
 from habitat_sim import SensorType
 from gymnasium import spaces
 
-from ..utils.tools.train_encoder import model as encoder
 from ..utils.type import TensorDict
 from math import pi
-from typing import Union, Dict
+from typing import Union
 
 
 def get_along_vertical_vector(base, obj):
@@ -49,13 +46,15 @@ class NavigationEnv(DroneGymEnvsBase):
             device: str = "cpu",
             target: Optional[th.Tensor] = None,
             max_episode_steps: int = 256,
+            tensor_output: bool = False,
     ):
-        # Hard-code sensor_kwargs like old_VisFly to ensure depth sensor is always available
-        sensor_kwargs = [{
-            "sensor_type": SensorType.DEPTH,
-            "uuid": "depth",
-            "resolution": [64, 64],
-        }]
+        # Ensure depth sensor is always available for NavigationEnv
+        if not sensor_kwargs:
+            sensor_kwargs = [{
+                "sensor_type": SensorType.DEPTH,
+                "uuid": "depth",
+                "resolution": [64, 64],
+            }]
 
         super().__init__(
             num_agent_per_scene=num_agent_per_scene,
@@ -69,78 +68,171 @@ class NavigationEnv(DroneGymEnvsBase):
             sensor_kwargs=sensor_kwargs,
             device=device,
             max_episode_steps=max_episode_steps,
-            tensor_output=False,
+            tensor_output=tensor_output,
         )
 
         self.target = th.ones((self.num_envs, 1)) @ th.as_tensor([9, 0., 1] if target is None else target).reshape(1, -1)
+        self.observation_space["state"] = spaces.Box(low=-np.inf, high=np.inf, shape=(16,), dtype=np.float32)
         self.observation_space["target"] = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
+        self.observation_space["depth"] = spaces.Box(low=0.0, high=1.0, shape=(1, 64, 64), dtype=np.float32)
 
         self.success_radius = 0.5
+        self.max_sense_radius = 10.0  # Maximum depth sensing range
 
     def get_observation(
             self,
             indices=None
     ) -> Dict:
+        # compute relative position to target (global frame) - same as ENV2
+        target = self.target.to(self.device)
+        if target.shape[0] == 1 and self.num_envs > 1:
+            target = target.repeat(self.num_envs, 1)
+        
+        rela_pos = (target - self.position).to(self.device)
+        # construct proprioceptive state: relative position, orientation, velocity, angular velocity
+        # Ensure all tensors are on the same device before stacking
+        orient = self.orientation.to(self.device)
+        vel = self.velocity.to(self.device)
+        ang_vel = self.angular_velocity.to(self.device)
+        collision_vector = self.collision_vector.to(self.device)
+        state = th.hstack([
+            rela_pos,
+            orient,
+            vel,
+            ang_vel,
+            collision_vector
+        ])
+        
+        # Handle depth sensor observation with specified processing
+        if self.visual and "depth" in self.sensor_obs:
+            depth_raw = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
+            # Apply specified depth processing: 1/(depth.clamp(0.2, 10))
+            depth = 1.0 / depth_raw.clamp(0.2, 10.0)
+            # Normalize to [0, 1] range: 1/10 = 0.1 (far), 1/0.2 = 5.0 (close)
+            depth = (depth - 0.1) / (5.0 - 0.1)  # Scale to [0, 1]
+            depth = depth.clamp(0, 1)  # Ensure bounds
+        else:
+            print("No depth sensor available")
+            exit()
+        
         # Match old_VisFly behavior exactly - return numpy arrays when requires_grad=False
         if not self.requires_grad:
-            if self.visual:
-                # Normalize depth to [0,1]
-                depth_np = self.sensor_obs["depth"] / self.max_sense_radius
-                depth_np = np.clip(depth_np, 0.0, 1.0)
-                return TensorDict({
-                    "state": self.state.cpu().clone().numpy(),
-                    "depth": depth_np,
-                    "target": self.target.cpu().clone().numpy(),
-                })
-            else:
-                return TensorDict({
-                    "state": self.state.cpu().clone().numpy(),
-                    "target": self.target.cpu().clone().numpy(),
-                })
+            return TensorDict({
+                "state": state.cpu().clone().numpy(),
+                "target": target.cpu().clone().numpy(),
+                "depth": depth.cpu().clone().numpy(),
+            })
         else:
-            if self.visual:
-                # Normalize depth to [0,1]
-                depth_t = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
-                depth_t = (depth_t / self.max_sense_radius).clamp(0, 1)
-                return TensorDict({
-                    "state": self.state.to(self.device),
-                    "depth": depth_t,
-                    "target": self.target.to(self.device),
-                })
-            else:
-                return TensorDict({
-                    "state": self.state.to(self.device),
-                    "target": self.target.to(self.device),
-                })
+            return TensorDict({
+                "state": state.to(self.device),
+                "target": target.to(self.device),
+                "depth": depth.to(self.device),
+            })
 
     def get_success(self) -> th.Tensor:
         """Define success as reaching within self.success_radius of target."""
-        # Ensure tensors are on the same device
-        position = self.position.to(self.device)
-        target = self.target.to(self.device)
-        return (position - target).norm(dim=1) <= self.success_radius
+        return th.zeros(self.num_envs, device=self.device, dtype=th.bool)
 
-    # For VisFly Manuscript
+    # For VisFly Manuscript - Hovering-optimized reward function
     def get_reward(self) -> th.Tensor:
-        # precise and stable target flight
-        base_r = 0.1
-        thrd_perce = th.pi/18
+        # Compute individual reward components for better diagnostics
+        vel = self.velocity.detach().clone()
+        ang_vel = self.angular_velocity.detach().clone()
+        target_distance = (self.target - self.position).norm(dim=1)
+        target_vector = (self.target - self.position) / (target_distance.unsqueeze(1) + 1e-6)
         
-        # Fix device mismatch: ensure reference quaternion is on same device as orientation
-        ref_orientation = th.tensor([1, 0, 0, 0], device=self.orientation.device, dtype=self.orientation.dtype)
+        # 1. Target approach velocity reward - reward velocity toward target
+        target_approach_velocity = (vel * target_vector).sum(dim=1)
+        approach_velocity_reward = target_approach_velocity.clamp(min=0) * 2.0
         
-        reward = base_r*0 + \
-                ((self.velocity *(self.target - self.position)).sum(dim=1) / (1e-6+(self.target - self.position).norm(dim=1))).clamp_max(10) * 0.01+\
-                 (((self.direction * self.velocity).sum(dim=1) / (1e-6+self.velocity.norm(dim=1)) / 1).clamp(-1., 1.).acos().clamp_min(thrd_perce)-thrd_perce)*-0.01+\
-                 (self.orientation - ref_orientation).norm(dim=1) * -0.00001 + \
-                 (self.velocity - 0).norm(dim=1) * -0.002 + \
-                 (self.angular_velocity - 0).norm(dim=1) * -0.002 + \
-                 1 / (self.collision_dis + 0.2) * -0.01 + \
-                 (1-self.collision_dis ).relu() * ((self.collision_vector * (self.velocity - 0)).sum(dim=1) / (1e-6+self.collision_dis)).relu() * -0.005 + \
-                 self._success * (self.max_episode_steps - self._step_count) * base_r * (0.2+0.8/ (1+1*self.velocity.norm(dim=1)))
+        # 2. Distance-based reward - less emphasis than velocity
+        approach_reward = th.exp(-0.2 * target_distance) * 1.0
+        
+        # 3. Forward direction alignment - reward looking toward target
+        forward_dir = self.direction  # drone's forward direction
+        target_alignment = (forward_dir * target_vector).sum(dim=1)
+        direction_reward = target_alignment.clamp(min=0) * 0.5
+        
+        # 4. Attitude-only stability - keep level but allow yaw freedom for target tracking
+        # Only penalize roll/pitch (x,y components), allow free yaw (z component)
+        roll_pitch_error = self.orientation[:, 1:3].norm(dim=1)  # x,y components control roll/pitch
+        orientation_stability = th.exp(-1.0 * roll_pitch_error) * 0.1  # Keep drone level but allow yaw
+        
+        # 5. Remove oscillation penalty - allow movement
+        
+        # 6. Collision avoidance with distance-based safety margin
+        collision_distance = self.collision_dis.clamp(min=1e-6, max=10.0)
+        safety_margin = 1.0
+        collision_penalty = th.where(
+            collision_distance < safety_margin,
+            -0.5 * th.exp(-(collision_distance / 0.5)),
+            0.0
+        )
+        
+        # 7. Penalty for velocity toward obstacles
+        collision_approach_penalty = th.where(
+            (self.collision_vector * vel).sum(dim=1) > 0,
+            -0.01 * (self.collision_vector * vel).sum(dim=1),
+            0.0
+        )
+        
+        # 8. Altitude constraints
+        altitude = self.position[:, 2]
+        height_penalty = th.where(altitude > 3.0, -0.01 * (altitude - 3.0)**2, 
+                         th.where(altitude < 0.2, -0.01 * (0.2 - altitude)**2, 
+                         th.tensor(0.0, device=self.device)))
+        
+        # 9. Reduced acceleration penalties to allow dynamic movement
+        if not hasattr(self, '_prev_velocity'):
+            self._prev_velocity = th.zeros_like(vel)
+        if not hasattr(self, '_prev_ang_velocity'):
+            self._prev_ang_velocity = th.zeros_like(ang_vel)
+            
+        dt = 0.03
+        lin_acc = (vel - self._prev_velocity) / dt
+        ang_acc = (ang_vel - self._prev_ang_velocity) / dt
+        
+        lin_acc_penalty = -0.001 * lin_acc.norm(dim=1)  # Much reduced
+        ang_acc_penalty = -0.001 * ang_acc.norm(dim=1)  # Much reduced
+        
+        self._prev_velocity = vel.clone().detach()
+        self._prev_ang_velocity = ang_vel.clone().detach()
+        
+        # Total reward - emphasize navigation over hovering
+        reward = (
+            approach_velocity_reward  # Primary: reward moving toward target
+            + approach_reward         # Secondary: distance-based
+            + direction_reward        # Tertiary: facing target
+            + orientation_stability   # Minimal: basic stability
+            + collision_penalty + collision_approach_penalty  # Safety
+            + height_penalty          # Constraints
+            + lin_acc_penalty + ang_acc_penalty  # Smoothness
+        )
 
-        return reward
+        if self.tensor_output:
+            return {
+                "reward": reward,
+                "approach_velocity_reward": approach_velocity_reward,
+                "approach_reward": approach_reward,
+                "direction_reward": direction_reward,
+                "orientation_stability": orientation_stability,
+                "collision_penalty": collision_penalty,
+                "collision_approach_penalty": collision_approach_penalty,
+                "height_penalty": height_penalty,
+                "lin_acc_penalty": lin_acc_penalty,
+                "ang_acc_penalty": ang_acc_penalty,
+                "collision_rate": self.is_collision.float().mean(),
+                "collision_dis": self.collision_dis.float().min(),
+                "dis_to_target": target_distance.mean(),
+                "min_dis_to_target": target_distance.min(),
+            }
+        else:
+            return reward
 
+    def get_failure(self) -> th.Tensor:
+        """Episodes end on collision or altitude violation."""
+        altitude_violation = self.position[:, 2] > 4.5  # Terminate if altitude > 2m
+        return self.is_collision | altitude_violation
 
 class NavigationEnv2(DroneGymEnvsBase):
     def __init__(
@@ -191,15 +283,30 @@ class NavigationEnv2(DroneGymEnvsBase):
             tensor_output=tensor_output
         )
         self.max_sense_radius = 10
+        self.sensor_kwargs = sensor_kwargs or []
         # self.target = th.tile(th.as_tensor([14, 0., 1] if target is None else target), (self.num_envs, 1))
         # self.encoder = encoder
         # self.encoder.load_state_dict(th.load(os.path.dirname(__file__) + '/../utils/tools/depth_autoencoder.pth'))
         # self.encoder.eval()
         # self.encoder.requires_grad_(False)
         self.success_radius = 0.5
+        # State space: 13 dimensions [relative position (3) + orientation (4) + velocity (3) + angular_velocity (3)]
+        self.observation_space["state"] = \
+            spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32)
         self.observation_space["target"] = \
             spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
-        self.target = target
+        # Initialize target properly for batch size
+        if target is None:
+            target_tensor = th.tensor([9, 0., 1], device=self.device)
+        else:
+            target_tensor = th.as_tensor(target, device=self.device)
+            
+        # Ensure target has correct shape for batch processing
+        if len(target_tensor.shape) == 1:
+            target_tensor = target_tensor.unsqueeze(0)
+        if target_tensor.shape[0] == 1 and self.num_envs > 1:
+            target_tensor = target_tensor.repeat(self.num_envs, 1)
+        self.target = target_tensor
         # Add target to observation space for learning algorithms that expect it (e.g. StateTargetImageExtractor)
         # self.observation_space["target"] = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
 
@@ -208,18 +315,24 @@ class NavigationEnv2(DroneGymEnvsBase):
         #     self.observation_space["depth"] = spaces.Box(low=0.0, high=1.0, shape=(1, 64, 64), dtype=np.float32)
 
     def get_success(self) -> th.Tensor:
-        return (self.position - self.target).norm(dim=1) <= self.success_radius
+        return (self.position.to(self.device) - self.target.to(self.device)).norm(dim=1) <= self.success_radius
         # return th.zeros(self.num_envs, device=self.device, dtype=th.bool)
 
     def get_failure(self) -> th.Tensor:
-        return self.is_collision
+        """Episodes end on collision or altitude violation."""
+        altitude_violation = self.position[:, 2] > 2.5  # Terminate if altitude > 2m
+        return self.is_collision | altitude_violation
 
     def get_observation(
             self,
             indices=None
     ) -> Dict:
         # compute relative position to target (global frame)
-        rela_pos = (self.target - self.position).to(self.device)
+        target = self.target.to(self.device)
+        if target.shape[0] == 1 and self.num_envs > 1:
+            target = target.repeat(self.num_envs, 1)
+        
+        rela_pos = (target - self.position).to(self.device)
         # construct proprioceptive state: relative position, orientation, velocity, angular velocity
         # Ensure all tensors are on the same device before stacking
         orient = self.orientation.to(self.device)
@@ -227,29 +340,28 @@ class NavigationEnv2(DroneGymEnvsBase):
         ang_vel = self.angular_velocity.to(self.device)
 
         state = th.hstack([
-            rela_pos / self.max_sense_radius,
+            rela_pos,
             orient,
-            vel / 10,
-            ang_vel / 10,
+            vel,
+            ang_vel,
         ])
-        # get or create depth observation and normalize
-        # if self.visual and "depth" in self.sensor_obs:
-        #     depth = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
-        # else:
-        #     # create dummy depth when visual disabled
-        #     depth = th.zeros((self.num_envs, 1, 64, 64), device=self.device)
-        # depth = (depth / self.max_sense_radius).clamp(0, 1)
-        # encode depth to latent representation
-        # depth_state = self.encoder.encode(depth)
+        
+        # Ensure depth observation is always available
+        if self.visual and "depth" in self.sensor_obs:
+            depth = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
+            depth = (depth / self.max_sense_radius).clamp(0, 1)
+        else:
+            # Create dummy depth when visual disabled or depth not available
+            depth = th.zeros((self.num_envs, 1, 64, 64), device=self.device)
+
         obs_dict = {
             "state": state,
-            "target": self.collision_vector,
+            "target": self.target.to(self.device),  # Use actual target position
         }
-        # Provide depth if available (or zeros if not visual)
-        # if self.visual:
-        #     obs_dict["depth"] = depth
-        # Expose absolute target position for the extractor (needed by StateTargetImageExtractor)
-        # obs_dict["target"] = self.target.to(self.device)
+        
+        # Only include depth if we have enabled depth sensors
+        if self.sensor_kwargs and len(self.sensor_kwargs) > 0 and "depth" in self.sensor_obs:
+            obs_dict["depth"] = depth
 
         return TensorDict(obs_dict)
 
@@ -274,79 +386,95 @@ class NavigationEnv2(DroneGymEnvsBase):
 
     #     return reward
 
-    def get_reward(self,
-                    # dyn,
-                    # collision_vector,
-                    # is_collision,
-                    # success,
-                    ) -> Union[th.Tensor, Dict[str, th.Tensor]]:
+    def get_analytical_reward(self,
+                              dyn,
+                              collision_vector,
+                              is_collision,
+                              success,
+                              ) -> th.Tensor:
         base_r = 0.1
-        thrd_perce = th.pi/18
+        thrd_perce = th.pi / 18
+        target_approaching_v, target_away_v, target_dis = \
+            get_along_vertical_vector(self.target - dyn.position, dyn.velocity)
+        obstacle_approaching_v, obstacle_away_v, collision_dis = \
+            get_along_vertical_vector(collision_vector, dyn.velocity)
+        obstacle_spd_r = obstacle_approaching_v.squeeze() * -0.1 * (1 - collision_dis).relu()
+        obstacle_dis_r = 1 / (collision_dis + 0.03) * -0.02
+        require_spd = (target_dis * 2).clamp(0.5, 10)
+        target_spd_r = (target_approaching_v - target_away_v) * 0.02
+
+        view_aware_r = (
+                               (
+                                       (dyn.direction * dyn.velocity).sum(dim=1) / (1e-6 + dyn.velocity.norm(dim=1))
+                               ).clamp(-1., 1.).acos()
+                               - thrd_perce).relu() * -0.01
+
+        reward = obstacle_spd_r \
+                 + target_spd_r \
+                 + view_aware_r \
+                 + obstacle_dis_r \
+                 + (dyn.angular_velocity - 0).norm(dim=1) * -0.01 \
+                 + is_collision * -2 \
+                 + success * 5
+
+        return reward
+
+    def get_reward(self) -> Union[th.Tensor, Dict[str, th.Tensor]]:
+        """
+        Updated reward function using the analytical reward computation.
+        Returns individual components when tensor_output is enabled.
+        """
+        # Clone and detach tensors to avoid gradient anomalies
+        position_safe = self.position.clone().detach()
+        velocity_safe = self.velocity.clone().detach()
+        collision_vector_safe = self.collision_vector.clone().detach()
+        direction_safe = self.direction.clone().detach()
+        angular_velocity_safe = self.angular_velocity.clone().detach()
         
-        # Fix device mismatch: ensure reference quaternion is on same device as orientation
-        ref_orientation = th.tensor([1, 0, 0, 0], device=self.orientation.device, dtype=self.orientation.dtype)
-
-        # Create detached copies to avoid inplace operations while maintaining gradients
-        velocity = self.velocity.clone().detach()
-        position = self.position.clone().detach()
-        direction = self.direction.clone().detach()
-        orientation = self.orientation.clone().detach()
-        angular_velocity = self.angular_velocity.clone().detach()
-
-        # Split each reward component
-        target_pos = self.target
-        r_velocity_target = ((velocity * (target_pos - position)).sum(dim=1) / (1e-6 + (target_pos - position).norm(dim=1))).clamp_max(10) * 0.01
+        collision_vector = collision_vector_safe
+        is_collision = self.is_collision
+        success = self.get_success()
         
-        # Prevent tiny velocity norm (which causes division explosion)
-        velocity_norm = velocity.norm(dim=1)
-        velocity_norm = velocity_norm.clamp_min(1e-3)
-
-        # Cosine similarity between direction and velocity
-        cos_angle = ((direction - 0) * velocity).sum(dim=1) / velocity_norm
-
-        # Clamp cos value to avoid NaNs from .acos()
-        cos_angle = cos_angle.clamp(-1.0 + 1e-6, 1.0 - 1e-6)
-
-        # Compute angle difference penalty
-        angle = cos_angle.acos()
-        angle_clamped = angle.clamp_min(th.pi / 18)  # Use thrd_perce
-        r_direction = (angle_clamped - th.pi / 18) * -0.01
-
-        r_orientation = (orientation - ref_orientation).norm(dim=1) * -0.00001
-        r_velocity_norm = (velocity - 0).norm(dim=1) * -0.002
-        r_angular_velocity_norm = (angular_velocity - 0).norm(dim=1) * -0.002
-        r_collision_distance = 1 / (self.collision_dis + 0.2) * -0.01
-        r_collision_velocity = (1 - self.collision_dis).relu() * ((self.collision_vector * (velocity - 0)).sum(dim=1) / (1e-6 + self.collision_dis)).relu() * -0.005
-        # Avoid inplace operations by computing velocity norm separately
-        velocity_magnitude = velocity.norm(dim=1)
-        r_success = self._success * (self.max_episode_steps - self._step_count) * base_r * (0.2 + 0.8 / (1 + 1 * velocity_magnitude))
-
-        # Total reward
-        reward = base_r * 0 \
-            + r_velocity_target \
-            + r_direction \
-            + r_orientation \
-            + r_velocity_norm \
-            + r_angular_velocity_norm \
-            + r_collision_distance \
-            + r_collision_velocity \
-            + r_success
-
-        # Return individual components for tensorboard logging or total reward based on flag
+        # Compute individual components
+        thrd_perce = th.pi / 18
+        target_approaching_v, target_away_v, target_dis = \
+            get_along_vertical_vector(self.target - position_safe, velocity_safe)
+        obstacle_approaching_v, obstacle_away_v, collision_dis = \
+            get_along_vertical_vector(collision_vector_safe, velocity_safe)
+        
+        obstacle_spd_r = obstacle_approaching_v.squeeze() * -0.1 * (1 - collision_dis).relu()
+        obstacle_dis_r = 1 / (collision_dis + 0.03) * -0.02
+        target_spd_r = (target_approaching_v - target_away_v) * 0.02
+        
+        view_aware_r = (
+            (
+                (direction_safe * velocity_safe).sum(dim=1) / (1e-6 + velocity_safe.norm(dim=1))
+            ).clamp(-1., 1.).acos()
+            - thrd_perce).relu() * -0.01
+        
+        angular_penalty = (angular_velocity_safe - 0).norm(dim=1) * -0.01
+        collision_penalty = is_collision.float() * -2
+        success_reward = success.float() * 5
+        
+        total_reward = obstacle_spd_r + target_spd_r + view_aware_r + obstacle_dis_r + angular_penalty + collision_penalty + success_reward
+        
         if self.tensor_output:
             return {
-                "reward": reward.detach(),
-                "r_velocity_target": r_velocity_target,
-                "r_direction": r_direction,
-                "r_orientation": r_orientation,
-                "r_velocity_norm": r_velocity_norm,
-                "r_angular_velocity_norm": r_angular_velocity_norm,
-                "r_collision_distance": r_collision_distance,
-                "r_collision_velocity": r_collision_velocity,
-                "r_success": r_success,
+                "reward": total_reward,
+                "obstacle_speed_reward": obstacle_spd_r,
+                "obstacle_distance_reward": obstacle_dis_r,
+                "target_speed_reward": target_spd_r,
+                "view_aware_reward": view_aware_r,
+                "angular_penalty": angular_penalty,
+                "collision_penalty": collision_penalty,
+                "success_reward": success_reward,
+                "target_distance": target_dis,
+                "collision_distance": collision_dis,
+                "is_collision": is_collision.float(),
+                "success": success.float(),
             }
         else:
-            return reward.detach()
+            return total_reward
 
 
 class NavigationEnv3(NavigationEnv):
@@ -456,7 +584,7 @@ class NavigationEnv3(NavigationEnv):
         )
         
         self.observation_space = spaces.Dict({
-            "state": self.observation_space["state"],
+            "state": spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32),
             "depth": self.observation_space["depth"],
             "target": spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32),
         })
@@ -794,22 +922,20 @@ class NavigationEnv3(NavigationEnv):
             angular_velocity = angular_velocity.unsqueeze(0)
         
         distance = distance.unsqueeze(1)
-        
+        orient = self.orientation.to(device)
         # Validate tensor shapes before concatenation
         N = self.num_envs
         assert rela_pos.shape == (N, 3), f"rela_pos shape: {rela_pos.shape}"
-        assert direction.shape == (N, 3), f"direction shape: {direction.shape}"
+        assert orient.shape == (N, 4), f"orient shape: {orient.shape}"
         assert velocity.shape == (N, 3), f"velocity shape: {velocity.shape}"
         assert angular_velocity.shape == (N, 3), f"angular_velocity shape: {angular_velocity.shape}"
-        assert distance.shape == (N, 1), f"distance shape: {distance.shape}"
         
-        # Concatenate state features
+        # Concatenate state features - adjusted to 13 dimensions for extractor compatibility
         state = th.cat([
             rela_pos,
-            direction, 
+            orient,
             velocity,
             angular_velocity,
-            distance,
         ], dim=1).to(device)
         
         # Handle depth sensor observation
@@ -831,8 +957,9 @@ class NavigationEnv3(NavigationEnv):
     # ==================================================================================
     
     def get_failure(self) -> th.Tensor:
-        """Episodes end on collision."""
-        return self.is_collision
+        """Episodes end on collision or altitude violation."""
+        altitude_violation = self.position[:, 2] > 2.0  # Terminate if altitude > 2m
+        return self.is_collision | altitude_violation
 
     def get_success(self) -> th.Tensor:
         """Episodes succeed when agent reaches target within threshold."""

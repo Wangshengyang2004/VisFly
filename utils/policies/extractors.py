@@ -66,6 +66,12 @@ class CustomBaseFeaturesExtractor(BaseFeaturesExtractor):
                 obs = observations[name].reshape(-1, *observations[name].shape[-3:])
             else:
                 obs = observations[name]
+            if isinstance(obs, th.Tensor):
+                if obs.dtype == th.uint8:
+                    obs = obs.float()
+                    # obs = obs / 255.0
+                elif obs.dtype == th.float64:
+                    obs = obs.float()  # Convert double to float32
             x = getattr(self, name + "_extractor")(obs)
             if is_exceed_dim:
                 x = x.reshape(*observations[name].shape[:-3], x.shape[-1])
@@ -361,10 +367,10 @@ def create_mlp(
         layer: List[int] = [],
         output_dim: Optional[int] = None,
         activation_fn: Type[nn.Module] = nn.ReLU,
-        batch_norm: Union[bool, List] = False,
+        bn: Union[bool, List] = False,
         squash_output: bool = False,
         bias: bool = True,
-        layer_norm: Union[bool, List] = False,
+        ln: Union[bool, List] = False,
         device: th.device = th.device("cpu")
 
 ) -> nn.Module:
@@ -389,12 +395,12 @@ def create_mlp(
     :return:
     """
     # Convert boolean to list if needed
-    batch_norm = [batch_norm] * len(layer) if isinstance(batch_norm, bool) else batch_norm
-    layer_norm = [layer_norm] * len(layer) if isinstance(layer_norm, bool) else layer_norm
+    batch_norm = [bn] * len(layer) if isinstance(bn, bool) else bn
+    layer_norm = [ln] * len(layer) if isinstance(ln, bool) else ln
     
     # Check for conflicts between batch_norm and layer_norm
-    for each_batch_norm, each_layer_norm in zip(batch_norm, layer_norm):
-        assert not (each_batch_norm and each_layer_norm), "batch normalization and layer normalization should not be both implemented."
+    for each_bn, each_ln in zip(batch_norm, layer_norm):
+        assert not (each_bn and each_ln), "batch normalization and layer normalization should not be both implemented."
 
     # Complete lists if shorter than layer
     if len(batch_norm) < len(layer):
@@ -457,8 +463,8 @@ def set_mlp_feature_extractor(cls, name, observation_space, net_arch, activation
         input_dim=input_dim,
         layer=layer,
         activation_fn=activation_fn,
-        batch_norm=net_arch.get("bn", False),
-        layer_norm=net_arch.get("ln", False)
+        bn=net_arch.get("bn", False),
+        ln=net_arch.get("ln", False)
     )
     setattr(cls, name + "_extractor", net)
     if not hasattr(cls, '_extract_names'):
@@ -526,8 +532,8 @@ def set_cnn_feature_extractor(cls, name, observation_space, net_arch, activation
         input_dim=conv_output,
         layer=net_arch.get("layer",[]),
         activation_fn=activation_fn,
-        batch_norm=net_arch.get("bn", False),
-        layer_norm=net_arch.get("ln", False)
+        bn=net_arch.get("bn", False),
+        ln=net_arch.get("ln", False)
     )
     # Compute output dim of the MLP
     mlp_layer = net_arch.get("layer", [])
@@ -543,6 +549,21 @@ def set_cnn_feature_extractor(cls, name, observation_space, net_arch, activation
     cls._extract_names.append(name)
     return _output_dim
 
+class FlexibleExtractor(CustomBaseFeaturesExtractor):
+    def __init__(self, observation_space: spaces.Dict, net_arch: Dict = {}, activation_fn: Type[nn.Module] = nn.ReLU):
+        super(FlexibleExtractor, self).__init__(observation_space=observation_space, net_arch=net_arch, activation_fn=activation_fn)
+    
+    def _build(self, observation_space, net_arch, activation_fn):
+        self._features_dim = 0
+        for key,value in net_arch.items():
+            if "semantic" in key or "color" in key or "depth" in key:
+                _image_features_dim = set_cnn_feature_extractor(self, key, observation_space[key], net_arch.get(key, {}), activation_fn)
+                self._features_dim += _image_features_dim
+            elif "state" in key:
+                _state_features_dim = set_mlp_feature_extractor(self, key, observation_space[key], net_arch.get(key, {}), activation_fn)
+                self._features_dim += _state_features_dim
+        # self._features_dim = self._features_dim
+        
 
 class TargetExtractor(CustomBaseFeaturesExtractor):
     def __init__(

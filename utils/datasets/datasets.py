@@ -2,7 +2,6 @@ from torch.utils.data import Dataset
 import glob
 import os
 import sys
-# Ensure the project root (the directory containing 'VisFly') is on PYTHONPATH when the script is run directly.
 sys.path.append(os.getcwd())
 from typing import List, Union
 from dataclasses import dataclass
@@ -224,10 +223,6 @@ class SceneGenerator:
         Returns:
             _type_: _description_
         """
-        # Fast path: hard-code bounds for the box_v1 training room so we don't need nav-mesh computation.
-        if "box_v1" in stage_name or "box" in stage_name:
-            # X 0-20, Y –10-10, Z 0-8 (same as garage default but centred) – adjust as needed
-            return [[0, -10, 0], [20, 10, 8]]
         if "garage" in stage_name:
             return [[0, -7, 0], [18, 7, 5.]]
         elif "box10_wall" in stage_name:
@@ -239,7 +234,7 @@ class SceneGenerator:
         scene_save_path = f"{self.save_path}/temp.scene_instance.json"
         self._save_json_file(scene_save_path, scene_json)
         habitat_sim_cfg = habitat_sim.SimulatorConfiguration()
-        habitat_sim_cfg.scene_dataset_config_file = "datasets/visfly-beta/visfly-beta.scene_dataset_config.json"
+        habitat_sim_cfg.scene_dataset_config_file = "VisFly/datasets/visfly-beta/visfly-beta.scene_dataset_config.json"
         habitat_sim_cfg.enable_physics = False
         agent_cfg = habitat_sim.agent.AgentConfiguration()
         sim = habitat_sim.Simulator(habitat_sim.Configuration(habitat_sim_cfg,[agent_cfg]))
@@ -405,15 +400,10 @@ class ChildrenPathDataset(Dataset):
         Args:
             strings (list): 一个包含字符串的列表.
         """
-        import os
-        # Robust path handling
-        if os.path.isabs(root_path) or root_path.startswith("VisFly/"):
-            self.root_path = root_path
-        else:
-            self.root_path = os.path.join("VisFly/configs", root_path)
+        self.root_path = root_path
         self.type = type
 
-        self.paths = self._load_scene_path(semantic=semantic, root_path=self.root_path)
+        self.paths = self._load_scene_path(semantic=semantic, root_path=root_path)
         if len(self.paths) == 0:
             # try to correct the root path
             # cut the path from "datasets"
@@ -504,15 +494,14 @@ if __name__ == "__main__":
             # object_margin=(0, 0, 0),
             light_random=False,
             stage=args.scene,
-            # Use generic objects directory (change if you add a dedicated pillar set)
-            object_set="objects"
+            object_set="objects/pillar"
         )
     )
     if args.generate:
         scene_save_paths = g.generate()
     if args.render:
-        os.system(f"python /home/lfx-desktop/files/habitat-sim/examples/viewer.py \
-        --dataset datasets/visfly-beta/visfly-beta.scene_dataset_config.json \
+        os.system(f"python /home/simonwsy/robo_dir/habitat-sim/examples/viewer.py \
+        --dataset VisFly/datasets/visfly-beta/visfly-beta.scene_dataset_config.json \
         --scene {g.name}_0  --disable-physics")
 
         # --dataset datasets/visfly-beta/visfly-beta.scene_dataset_config.json \

@@ -20,7 +20,7 @@ from VisFly.envs.NavigationEnv import NavigationEnv2
 from VisFly.utils.type import Uniform
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # Disable gradient anomaly detection for physics-based BPTT
-# torch.autograd.set_detect_anomaly(True)  # Disabled for stability
+torch.autograd.set_detect_anomaly(True)  # Disabled for stability
 
 """ SAVED HYPERPARAMETERS """
 # Number of parallel environments (agents)
@@ -59,7 +59,7 @@ random_kwargs = {
 
 # Scene configuration for visual rendering
 scene_kwargs = {
-    "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_pillar"
+    "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 }
 
 # Dynamics configuration 
@@ -160,7 +160,7 @@ def main():
         
         # Add render settings for test environment
         test_scene_kwargs = {
-            "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_pillar",
+            "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall",
             "render_settings": {
                 "mode": "fix",
                 "view": "custom",
