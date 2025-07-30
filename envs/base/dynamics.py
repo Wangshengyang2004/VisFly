@@ -119,10 +119,14 @@ class Dynamics:
         self._angular_acc = th.zeros((3, self.num), device=self.device)
         # self._ctrl_i = th.zeros((3, self.num), device=self.device)
         # self._pre_action = th.zeros((4, self.num), device=self.device)
-        self._pre_action = [
-            th.zeros((4, self.num), device=self.device)
-            for _ in range(self._comm_delay_steps)
-        ]
+        # Optimize control delay buffer initialization
+        if self._comm_delay_steps > 0:
+            self._pre_action = [
+                th.zeros((4, self.num), dtype=th.float32, device=self.device)
+                for _ in range(self._comm_delay_steps)
+            ]
+        else:
+            self._pre_action = []
 
         self._linear_drag_coeffs = self._linear_drag_coeffs_mean
         self._quad_drag_coeffs = self._quad_drag_coeffs_mean
@@ -205,14 +209,18 @@ class Dynamics:
             self._orientation = Quaternion(num=self.num, device=self.device) if ori is None else Quaternion(*ori.T)
             self._velocity = th.zeros((3, self.num), device=self.device) if vel is None else vel.T
             self._angular_velocity = th.zeros((3, self.num), device=self.device) if ori_vel is None else ori_vel.T
-            self._thrusts = th.ones((4, self.num), device=self.device) * self._init_thrust if thrusts is None else thrusts.T
-            self._motor_omega = th.ones((4, self.num), device=self.device) * self._init_motor_omega if motor_omega is None else motor_omega.T
-            self._t = th.zeros((self.num,), device=self.device) if t is None else t
+            self._thrusts = th.ones((4, self.num), dtype=th.float32, device=self.device) * self._init_thrust.to(self.device) if thrusts is None else thrusts.T
+            self._motor_omega = th.ones((4, self.num), dtype=th.float32, device=self.device) * self._init_motor_omega.to(self.device) if motor_omega is None else motor_omega.T
+            self._t = th.zeros((self.num,), dtype=th.float32, device=self.device) if t is None else t
             # self._t = th.zeros((self.num,), device=self.device) + th.rand((self.num), device=self.device)*3.14*2 if t is None else t
             # self._ctrl_i = th.zeros((3, self.num), device=self.device)
-            self._angular_acc = th.zeros((3, self.num), device=self.device)
-            self._acc = th.zeros((3, self.num), device=self.device)
-            self._pre_action = [th.zeros(4, self.num) for _ in range(self._comm_delay_steps)]
+            self._angular_acc = th.zeros((3, self.num), dtype=th.float32, device=self.device)
+            self._acc = th.zeros((3, self.num), dtype=th.float32, device=self.device)
+            # Optimize control delay buffer reset
+            if self._comm_delay_steps > 0:
+                self._pre_action = [th.zeros((4, self.num), dtype=th.float32, device=self.device) for _ in range(self._comm_delay_steps)]
+            else:
+                self._pre_action = []
             # domain randomization: apply drag noise to entire coefficient tensors
             if self._drag_random:
                 noise_lin = ((th.rand_like(self._linear_drag_coeffs_mean) - 0.5) * 2 * self._drag_random).clamp(-0.5, 0.5) + 1
@@ -224,10 +232,10 @@ class Dynamics:
             self._orientation[indices] = Quaternion(num=len(indices), device=self.device) if ori is None else Quaternion(*ori.T)
             self._velocity[:, indices] = th.zeros((3, len(indices)), device=self.device) if vel is None else vel.T
             self._angular_velocity[:, indices] = th.zeros((3, len(indices)), device=self.device) if ori_vel is None else ori_vel.T
-            self._motor_omega[:, indices] = th.ones((4, len(indices)), device=self.device) * self._init_motor_omega if motor_omega is None else motor_omega.T
-            self._thrusts[:, indices] = th.ones((4, len(indices)), device=self.device) * self._init_thrust if thrusts is None else thrusts.T
+            self._motor_omega[:, indices] = th.ones((4, len(indices)), device=self.device) * self._init_motor_omega.to(self.device) if motor_omega is None else motor_omega.T
+            self._thrusts[:, indices] = th.ones((4, len(indices)), device=self.device) * self._init_thrust.to(self.device) if thrusts is None else thrusts.T
             self._t[indices] = th.zeros((len(indices),), device=self.device) if t is None else t
-            self._t[indices] = th.zeros((len(indices),), device=self.device) + th.rand((len(indices),)) * 3.14*2 if t is None else t
+            self._t[indices] = th.zeros((len(indices),), device=self.device) + th.rand((len(indices),), device=self.device) * 3.14*2 if t is None else t
             # self._ctrl_i[:, indices] = th.zeros((3, len(indices)), device=self.device)
             self._angular_acc[:, indices] = th.zeros((3, len(indices)), device=self.device)
             self._acc[:, indices] = th.zeros((3, len(indices)), device=self.device)
@@ -587,30 +595,33 @@ class Dynamics:
         if not isinstance(command, th.Tensor):
             return th.from_numpy(command).T
 
+        # Ensure command is on the correct device
+        command = command.to(self.device)
+
         if self.action_type == ACTION_TYPE.BODYRATE:
             command = th.hstack([
-                (command[:, :1] * self._normal_params["thrust"].half + self._normal_params["thrust"].mean) * self.m,
-                command[:, 1:] * self._normal_params["bodyrate"].half + self._normal_params["bodyrate"].mean
+                (command[:, :1] * self._normal_params["thrust"].half.to(self.device) + self._normal_params["thrust"].mean.to(self.device)) * self.m,
+                command[:, 1:] * self._normal_params["bodyrate"].half.to(self.device) + self._normal_params["bodyrate"].mean.to(self.device)
             ]
             )
             return command.T
 
         elif self.action_type == ACTION_TYPE.THRUST:
-            command = self.m * (command * self._normal_params["thrust"].half + self._normal_params["thrust"].mean).T
+            command = self.m * (command * self._normal_params["thrust"].half.to(self.device) + self._normal_params["thrust"].mean.to(self.device)).T
             return command
 
         elif self.action_type == ACTION_TYPE.VELOCITY:
             command = th.hstack([
-                command[:, :1] * self._normal_params["yaw"].half + self._normal_params["yaw"].mean,
-                command[:, 1:] * self._normal_params["velocity"].half + self._normal_params["velocity"].mean
+                command[:, :1] * self._normal_params["yaw"].half.to(self.device) + self._normal_params["yaw"].mean.to(self.device),
+                command[:, 1:] * self._normal_params["velocity"].half.to(self.device) + self._normal_params["velocity"].mean.to(self.device)
             ]
             )
             return command
 
         elif self.action_type == ACTION_TYPE.POSITION:
             command = th.hstack([
-                command[:, :1] * self._normal_params["yaw"].half + self._normal_params["yaw"].mean,
-                command[:, 1:] * self._normal_params["velocity"].half + self._normal_params["velocity"].mean
+                command[:, :1] * self._normal_params["yaw"].half.to(self.device) + self._normal_params["yaw"].mean.to(self.device),
+                command[:, 1:] * self._normal_params["velocity"].half.to(self.device) + self._normal_params["velocity"].mean.to(self.device)
             ]
             )
             return command

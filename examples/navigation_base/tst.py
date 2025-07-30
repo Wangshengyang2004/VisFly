@@ -230,6 +230,11 @@ class Test(TestBase):
         # Extract absolute positions from state data (first 3 columns are XYZ positions)
         absolute_positions = state_data[:, :, 0:3]
         
+        # Get target positions for plotting
+        targets = self.obs_all[0]["target"]
+        if hasattr(targets, 'cpu'):
+            targets = targets.cpu().numpy()
+        
         # Get number of environments from state data
         num_envs = state_data.shape[1]
         
@@ -314,16 +319,77 @@ class Test(TestBase):
             else:
                 # Red X for failed agents (remove edgecolor to avoid warning)
                 ax2.scatter(x_pos[-1], y_pos[-1], z_pos[-1], color='red', s=50, marker='x', linewidth=1)
+
+        # Add target positions for all agents (if available in observations)
+        if "target" in self.obs_all[0]:
+            # Plot target positions as gold stars
+            for agent_idx in range(num_envs):
+                # Handle different target array shapes
+                if len(targets.shape) == 1:  # Single agent case: targets is 1D array [x, y, z]
+                    if agent_idx == 0 and len(targets) >= 3:  # Only plot for the first (and only) agent
+                        ax2.scatter(targets[0], targets[1], targets[2], 
+                                   color='gold', s=80, marker='*', edgecolor='black', linewidth=1, 
+                                   label='Target')
+                elif len(targets.shape) == 2:  # Multi-agent case or single agent stored as 2D: targets is 2D array
+                    if targets.shape[0] > agent_idx:  # Check if this agent index exists
+                        target_pos = targets[agent_idx]
+                        if len(target_pos) >= 3:  # ensure 3D coordinates
+                            ax2.scatter(target_pos[0], target_pos[1], target_pos[2], 
+                                       color='gold', s=80, marker='*', edgecolor='black', linewidth=1, 
+                                       label='Target' if agent_idx == 0 else None)  # label only once
+        else:
+            print(f"DEBUG: No target found in observations")
+        
+        # Additional direct target plotting to ensure visibility
+        if "target" in self.obs_all[0]:
+            print(f"DEBUG: Target found in observations")
+            print(f"DEBUG: targets shape: {targets.shape}")
+            print(f"DEBUG: targets content: {targets}")
+            print(f"DEBUG: num_envs: {num_envs}")
+            
+            # Force plot target for all agents with a simpler approach
+            if len(targets.shape) == 1 and len(targets) >= 3:
+                print(f"DEBUG: Plotting single agent target at: {targets[0]}, {targets[1]}, {targets[2]}")
+                # Single agent case
+                ax2.scatter(targets[0], targets[1], targets[2], 
+                           color='gold', s=120, marker='*', edgecolor='red', linewidth=2, 
+                           label='Target (Direct)', zorder=10)  # High zorder to be on top
+            elif len(targets.shape) == 2:
+                print(f"DEBUG: Plotting multi-agent targets")
+                # Multi-agent case
+                for i in range(min(targets.shape[0], num_envs)):
+                    if len(targets[i]) >= 3:
+                        print(f"DEBUG: Agent {i} target at: {targets[i][0]}, {targets[i][1]}, {targets[i][2]}")
+                        ax2.scatter(targets[i][0], targets[i][1], targets[i][2], 
+                                   color='gold', s=120, marker='*', edgecolor='red', linewidth=2, 
+                                   label='Target (Direct)' if i == 0 else None, zorder=10)
+            else:
+                print(f"DEBUG: Unexpected targets shape: {targets.shape}")
+        else:
+            print(f"DEBUG: No target found in observations keys: {list(self.obs_all[0].keys())}")
         
         ax2.set_xlabel("X Position (m)")
         ax2.set_ylabel("Y Position (m)")
         ax2.set_zlabel("Z Position (m)")
         ax2.set_title("3D Trajectory")
         
-        # Make the 3D plot aspect ratio equal - use absolute positions
+        # Make the 3D plot aspect ratio equal - use absolute positions and include targets
         all_x = absolute_positions[:, :, 0].flatten()
         all_y = absolute_positions[:, :, 1].flatten()
         all_z = absolute_positions[:, :, 2].flatten()
+        
+        # Include target positions in the bounds calculation
+        if "target" in self.obs_all[0]:
+            if len(targets.shape) == 1 and len(targets) >= 3:
+                all_x = np.append(all_x, targets[0])
+                all_y = np.append(all_y, targets[1])
+                all_z = np.append(all_z, targets[2])
+            elif len(targets.shape) == 2:
+                for i in range(min(targets.shape[0], num_envs)):
+                    if len(targets[i]) >= 3:
+                        all_x = np.append(all_x, targets[i][0])
+                        all_y = np.append(all_y, targets[i][1])
+                        all_z = np.append(all_z, targets[i][2])
 
         max_range = np.array([all_x.max()-all_x.min(), all_y.max()-all_y.min(), all_z.max()-all_z.min()]).max() / 2.0
         mid_x = (all_x.max()+all_x.min()) * 0.5
@@ -360,8 +426,8 @@ class Test(TestBase):
 
     def draw_debug(self, names=None):
         """
-        Debug plotting function to analyze flip maneuver events, motion patterns, and reward components.
-        This helps identify potential reward function bugs and training issues specific to flip maneuvers.
+        Debug plotting function to analyze collision events, motion patterns, and reward components.
+        This helps identify potential reward function bugs and training issues.
         """
         # Use actual state data which contains absolute positions
         state_data = [state for state in self.state_all]
@@ -371,9 +437,13 @@ class Test(TestBase):
         
         # Extract key data
         absolute_positions = state_data[:, :, 0:3]  # XYZ positions
-        quaternions = state_data[:, :, 3:7]  # Quaternions
         velocities = state_data[:, :, 7:10]  # Linear velocities
         angular_velocities = state_data[:, :, 10:13]  # Angular velocities
+        
+        # Get target positions
+        targets = self.obs_all[0]["target"]
+        if hasattr(targets, 'cpu'):
+            targets = targets.cpu().numpy()
         
         num_envs = state_data.shape[1]
         num_timesteps = state_data.shape[0]
@@ -402,52 +472,28 @@ class Test(TestBase):
                     if "is_failure" in agent_info and agent_info["is_failure"]:
                         failure_timesteps.append((timestep_idx, agent_idx))
         
-        # Calculate roll, pitch, yaw from quaternions
-        roll_pitch_yaw = []
+        # Calculate distances to target
+        distances_to_target = []
         for timestep_idx in range(num_timesteps):
-            timestep_rpy = []
+            timestep_distances = []
             for agent_idx in range(num_envs):
-                q = quaternions[timestep_idx, agent_idx]
-                # Convert quaternion to Euler angles (roll, pitch, yaw)
-                w, x, y, z = q[0], q[1], q[2], q[3]
-                
-                # Roll (x-axis rotation)
-                sinr_cosp = 2 * (w * x + y * z)
-                cosr_cosp = 1 - 2 * (x * x + y * y)
-                roll = np.arctan2(sinr_cosp, cosr_cosp)
-                
-                # Pitch (y-axis rotation)
-                sinp = 2 * (w * y - z * x)
-                if abs(sinp) >= 1:
-                    pitch = np.copysign(np.pi / 2, sinp)  # Use 90 degrees if out of range
+                if len(targets.shape) == 1 and len(targets) >= 3:
+                    # Single agent case
+                    target_pos = targets[:3]
+                elif len(targets.shape) == 2 and targets.shape[0] > agent_idx:
+                    # Multi-agent case
+                    target_pos = targets[agent_idx][:3]
                 else:
-                    pitch = np.arcsin(sinp)
+                    target_pos = np.array([0, 0, 0])  # Default target
                 
-                # Yaw (z-axis rotation)
-                siny_cosp = 2 * (w * z + x * y)
-                cosy_cosp = 1 - 2 * (y * y + z * z)
-                yaw = np.arctan2(siny_cosp, cosy_cosp)
-                
-                timestep_rpy.append([roll, pitch, yaw])
-            roll_pitch_yaw.append(timestep_rpy)
-        roll_pitch_yaw = np.array(roll_pitch_yaw)
-        
-        # Calculate flip completion percentage (roll/pitch rotation magnitude)
-        flip_progress = []
-        for timestep_idx in range(num_timesteps):
-            timestep_flip_progress = []
-            for agent_idx in range(num_envs):
-                roll = roll_pitch_yaw[timestep_idx, agent_idx, 0]
-                pitch = roll_pitch_yaw[timestep_idx, agent_idx, 1]
-                # Calculate how many 2π rotations (complete flips) have been achieved
-                flip_magnitude = np.sqrt((roll / (2 * np.pi))**2 + (pitch / (2 * np.pi))**2)
-                timestep_flip_progress.append(flip_magnitude)
-            flip_progress.append(timestep_flip_progress)
-        flip_progress = np.array(flip_progress)
+                agent_pos = absolute_positions[timestep_idx, agent_idx, :3]
+                distance = np.linalg.norm(agent_pos - target_pos)
+                timestep_distances.append(distance)
+            distances_to_target.append(timestep_distances)
+        distances_to_target = np.array(distances_to_target)
         
         # Calculate speeds
         speeds = np.linalg.norm(velocities, axis=2)
-        angular_speeds = np.linalg.norm(angular_velocities, axis=2)
         
         # Calculate accelerations (derivative of velocity)
         accelerations = np.zeros_like(velocities)
@@ -494,29 +540,30 @@ class Test(TestBase):
             ax.legend()
             ax.grid(True)
         
-        # 1. Flip progress over time
+        # 1. Distance to target over time
         ax1 = plt.subplot(3, 3, 1)
-        _plot_with_events(ax1, flip_progress, "Flip Progress (Complete Rotations)", "Flip Magnitude", 
+        _plot_with_events(ax1, distances_to_target, "Distance to Target", "Distance (m)", 
                          collision_timesteps, success_timesteps)
         
-        # 2. Roll, Pitch, Yaw angles
+        # 2. Speed over time
         ax2 = plt.subplot(3, 3, 2)
-        _plot_with_events(ax2, roll_pitch_yaw, "Euler Angles", "Angle (rad)", 
+        _plot_with_events(ax2, speeds, "Speed Magnitude", "Speed (m/s)", 
                          collision_timesteps, success_timesteps)
         
-        # 3. Angular velocity components
+        # 3. Acceleration magnitude over time
         ax3 = plt.subplot(3, 3, 3)
-        _plot_with_events(ax3, angular_velocities, "Angular Velocity Components", "Angular Velocity (rad/s)", 
+        _plot_with_events(ax3, acceleration_magnitudes, "Acceleration Magnitude", "Acceleration (m/s²)", 
                          collision_timesteps, success_timesteps)
         
-        # 4. Angular speed magnitude
+        # 4. Angular velocity magnitude
+        angular_speeds = np.linalg.norm(angular_velocities, axis=2)
         ax4 = plt.subplot(3, 3, 4)
         _plot_with_events(ax4, angular_speeds, "Angular Speed", "Angular Speed (rad/s)", 
                          collision_timesteps, success_timesteps)
         
-        # 5. Linear speed over time
+        # 5. Velocity components (X, Y, Z)
         ax5 = plt.subplot(3, 3, 5)
-        _plot_with_events(ax5, speeds, "Speed Magnitude", "Speed (m/s)", 
+        _plot_with_events(ax5, velocities, "Velocity Components", "Velocity (m/s)", 
                          collision_timesteps, success_timesteps)
         
         # 6. Position components (X, Y, Z)
@@ -524,27 +571,91 @@ class Test(TestBase):
         _plot_with_events(ax6, absolute_positions, "Position Components", "Position (m)", 
                          collision_timesteps, success_timesteps)
         
-        # 7. Quaternion components
+        # 7. Collision analysis - distance to obstacles (if available)
         ax7 = plt.subplot(3, 3, 7)
-        _plot_with_events(ax7, quaternions, "Quaternion Components", "Quaternion", 
-                         collision_timesteps, success_timesteps)
+        if hasattr(self.env, 'collision_dis') and self.env.collision_dis is not None:
+            collision_distances = self.env.collision_dis
+            if hasattr(collision_distances, 'cpu'):
+                collision_distances = collision_distances.cpu().numpy()
+            elif hasattr(collision_distances, 'numpy'):
+                collision_distances = collision_distances.numpy()
+            
+            # Plot collision distances for each agent
+            if collision_distances.ndim == 1:
+                # Single agent: check if it's a time series or scalar
+                if len(collision_distances) == len(t):
+                    # Time series case
+                    ax7.plot(t, collision_distances, 
+                            label=f'Agent 0', alpha=0.7)
+                    
+                    # Mark collision events
+                    for timestep_idx, agent_idx in collision_timesteps:
+                        if timestep_idx < len(t) and agent_idx < 1:
+                            ax7.scatter(t[timestep_idx], collision_distances[timestep_idx], 
+                                       color='red', s=50, marker='x', zorder=5)
+                else:
+                    # Scalar case - skip plotting or use constant line
+                    print(f"Collision distances is scalar ({collision_distances.shape}), skipping collision plot")
+            else:
+                # Multi-agent: shape (T, N)
+                num_envs = collision_distances.shape[1]
+                for agent_idx in range(num_envs):
+                    ax7.plot(t, collision_distances[:, agent_idx], 
+                            label=f'Agent {agent_idx}', alpha=0.7)
+                
+                # Mark collision events
+                for timestep_idx, agent_idx in collision_timesteps:
+                    if timestep_idx < len(t) and agent_idx < num_envs:
+                        ax7.scatter(t[timestep_idx], collision_distances[timestep_idx, agent_idx], 
+                                   color='red', s=50, marker='x', zorder=5)
+            
+            ax7.set_title("Distance to Obstacles")
+            ax7.set_ylabel("Distance (m)")
+            ax7.set_xlabel("Time (s)")
+            ax7.legend()
+            ax7.grid(True)
+            ax7.axhline(y=0.3, color='orange', linestyle='--', alpha=0.7, label='Safety Threshold')
+        else:
+            ax7.text(0.5, 0.5, 'Collision distance data not available', 
+                    transform=ax7.transAxes, ha='center', va='center')
+            ax7.set_title("Distance to Obstacles (Not Available)")
         
-        # 8. Acceleration magnitude
+        # 8. Reward analysis (if individual rewards are available)
         ax8 = plt.subplot(3, 3, 8)
-        _plot_with_events(ax8, acceleration_magnitudes, "Acceleration Magnitude", "Acceleration (m/s²)", 
-                         collision_timesteps, success_timesteps)
+        if hasattr(self.env, '_indiv_rewards') and self.env._indiv_rewards is not None:
+            # Plot individual reward components
+            reward_components = self.env._indiv_rewards
+            for component_name, component_data in reward_components.items():
+                if hasattr(component_data, 'cpu'):
+                    component_data = component_data.cpu().numpy()
+                elif hasattr(component_data, 'numpy'):
+                    component_data = component_data.numpy()
+                
+                if component_data.ndim == 1 and len(component_data) == num_timesteps:
+                    ax8.plot(t, component_data, label=component_name, alpha=0.7)
+            
+            ax8.set_title("Individual Reward Components")
+            ax8.set_ylabel("Reward")
+            ax8.set_xlabel("Time (s)")
+            ax8.legend()
+            ax8.grid(True)
+        else:
+            ax8.text(0.5, 0.5, 'Individual reward data not available', 
+                    transform=ax8.transAxes, ha='center', va='center')
+            ax8.set_title("Individual Reward Components (Not Available)")
         
-        # 9. Motion quality analysis - flip rate
+        # 9. Motion quality analysis
         ax9 = plt.subplot(3, 3, 9)
         
-        # Calculate flip rate (derivative of flip progress)
-        flip_rates = np.zeros_like(flip_progress)
-        for timestep_idx in range(1, num_timesteps):
+        # Calculate motion smoothness (jerk)
+        jerks = np.zeros_like(accelerations)
+        for timestep_idx in range(2, num_timesteps):
             dt = t[timestep_idx] - t[timestep_idx-1]
             if dt > 0:
-                flip_rates[timestep_idx] = (flip_progress[timestep_idx] - flip_progress[timestep_idx-1]) / dt
+                jerks[timestep_idx] = (accelerations[timestep_idx] - accelerations[timestep_idx-1]) / dt
+        jerk_magnitudes = np.linalg.norm(jerks, axis=2)
         
-        _plot_with_events(ax9, flip_rates, "Flip Rate", "Flip Rate (flips/s)", 
+        _plot_with_events(ax9, jerk_magnitudes, "Motion Jerk (Smoothness)", "Jerk (m/s³)", 
                          collision_timesteps, success_timesteps)
         
         plt.tight_layout()
@@ -556,7 +667,7 @@ class Test(TestBase):
         print(f"Debug analysis plot saved to: {self.save_path}/debug_analysis.png")
         
         # Print summary statistics
-        print("\n=== FLIP DEBUG ANALYSIS SUMMARY ===")
+        print("\n=== DEBUG ANALYSIS SUMMARY ===")
         print(f"Total timesteps: {num_timesteps}")
         print(f"Number of agents: {num_envs}")
         print(f"Collision events: {len(collision_timesteps)}")
@@ -572,35 +683,29 @@ class Test(TestBase):
                         pos = absolute_positions[timestep_idx, agent_idx]
                         vel = velocities[timestep_idx, agent_idx]
                         speed = np.linalg.norm(vel)
-                        flip_prog = flip_progress[timestep_idx, agent_idx]
-                        print(f"    Position: {pos}, Speed: {speed:.2f} m/s, Flip progress: {flip_prog:.2f}")
+                        print(f"    Position: {pos}, Speed: {speed:.2f} m/s")
         
         if success_timesteps:
             print("\nSuccess Analysis:")
             for timestep_idx, agent_idx in success_timesteps:
                 if timestep_idx < len(t):
                     print(f"  Agent {agent_idx} succeeded at t={t[timestep_idx]:.2f}s")
-                    if timestep_idx < len(flip_progress):
-                        flip_prog = flip_progress[timestep_idx, agent_idx]
-                        print(f"    Final flip progress: {flip_prog:.2f} complete rotations")
         
         # Motion quality statistics
         mean_speed = np.mean(speeds)
         max_speed = np.max(speeds)
-        mean_angular_speed = np.mean(angular_speeds)
-        max_angular_speed = np.max(angular_speeds)
-        mean_flip_rate = np.mean(flip_rates)
-        max_flip_rate = np.max(flip_rates)
-        final_flip_progress = np.mean(flip_progress[-1, :])
+        mean_accel = np.mean(acceleration_magnitudes)
+        max_accel = np.max(acceleration_magnitudes)
+        mean_jerk = np.mean(jerk_magnitudes)
+        max_jerk = np.max(jerk_magnitudes)
         
-        print(f"\nFlip Maneuver Statistics:")
+        print(f"\nMotion Quality Statistics:")
         print(f"  Mean speed: {mean_speed:.2f} m/s")
         print(f"  Max speed: {max_speed:.2f} m/s")
-        print(f"  Mean angular speed: {mean_angular_speed:.2f} rad/s")
-        print(f"  Max angular speed: {max_angular_speed:.2f} rad/s")
-        print(f"  Mean flip rate: {mean_flip_rate:.2f} flips/s")
-        print(f"  Max flip rate: {max_flip_rate:.2f} flips/s")
-        print(f"  Final average flip progress: {final_flip_progress:.2f} complete rotations")
+        print(f"  Mean acceleration: {mean_accel:.2f} m/s²")
+        print(f"  Max acceleration: {max_accel:.2f} m/s²")
+        print(f"  Mean jerk: {mean_jerk:.2f} m/s³")
+        print(f"  Max jerk: {max_jerk:.2f} m/s³")
         
         # Only show if we have a display
         try:

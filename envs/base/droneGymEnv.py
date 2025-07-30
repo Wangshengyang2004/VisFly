@@ -112,16 +112,17 @@ class DroneGymEnvsBase(VecEnv):
         else:
             raise ValueError("action_type should be one of ['bodyrate', 'thrust', 'velocity']")
 
-        self._step_count = th.zeros((self.num_agent,), dtype=th.int32)
-        self._reward = th.zeros((self.num_agent,))
-        self._rewards = th.zeros((self.num_agent,))
-        self._action = th.zeros((self.num_agent, 4))
+        # Optimize tensor initialization for large batches (160+ envs)
+        self._step_count = th.zeros((self.num_agent,), dtype=th.int32, device=self.device)
+        self._reward = th.zeros((self.num_agent,), dtype=th.float32, device=self.device)
+        self._rewards = th.zeros((self.num_agent,), dtype=th.float32, device=self.device)
+        self._action = th.zeros((self.num_agent, 4), dtype=th.float32, device=self.device)
         self._observations = TensorDict({})
 
-        self._success = th.zeros(self.num_agent, dtype=bool)
-        self._failure = th.zeros(self.num_agent, dtype=bool)
-        self._episode_done = th.zeros(self.num_agent, dtype=bool)
-        self._done = th.zeros(self.num_agent, dtype=bool)
+        self._success = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._failure = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._episode_done = th.zeros(self.num_agent, dtype=bool, device=self.device)
+        self._done = th.zeros(self.num_agent, dtype=bool, device=self.device)
         self._info = [{"TimeLimit.truncated": False} for _ in range(self.num_agent)]
 
         # For convenience of intuitive visualization of reward components
@@ -342,8 +343,9 @@ class DroneGymEnvsBase(VecEnv):
         sim_device = self.envs.device if hasattr(self.envs, 'device') else self.device
 
         if indices is None:
-            self._reward = th.zeros((self.num_agent,), device=self.device)
-            self._rewards = th.zeros((self.num_agent,), device=self.device)
+            # Use efficient tensor creation for large batches
+            self._reward = th.zeros((self.num_agent,), device=self.device, dtype=th.float32)
+            self._rewards = th.zeros((self.num_agent,), device=self.device, dtype=th.float32)
             self._done = th.zeros(self.num_agent, dtype=bool, device=self.device)
             self._episode_done = th.zeros(self.num_agent, dtype=bool, device=self.device)
             self._step_count = th.zeros((self.num_agent,), dtype=th.int32, device=self.device)
@@ -508,7 +510,7 @@ class DroneGymEnvsBase(VecEnv):
 
     @property
     def is_collision(self):
-        return self.envs.is_collision
+        return self.envs.is_collision.to(self.device) if hasattr(self.envs.is_collision, 'to') else self.envs.is_collision
 
     @property
     def done(self):
@@ -528,23 +530,23 @@ class DroneGymEnvsBase(VecEnv):
 
     @property
     def direction(self):
-        return self.envs.direction
+        return self.envs.direction.to(self.device) if hasattr(self.envs.direction, 'to') else self.envs.direction
 
     @property
     def position(self):
-        return self.envs.position
+        return self.envs.position.to(self.device) if hasattr(self.envs.position, 'to') else self.envs.position
 
     @property
     def orientation(self):
-        return self.envs.orientation
+        return self.envs.orientation.to(self.device) if hasattr(self.envs.orientation, 'to') else self.envs.orientation
 
     @property
     def velocity(self):
-        return self.envs.velocity
+        return self.envs.velocity.to(self.device) if hasattr(self.envs.velocity, 'to') else self.envs.velocity
 
     @property
     def angular_velocity(self):
-        return self.envs.angular_velocity
+        return self.envs.angular_velocity.to(self.device) if hasattr(self.envs.angular_velocity, 'to') else self.envs.angular_velocity
 
     @property
     def t(self):
@@ -556,19 +558,19 @@ class DroneGymEnvsBase(VecEnv):
 
     @property
     def collision_vector(self):
-        return self.envs.collision_vector
+        return self.envs.collision_vector.to(self.device) if hasattr(self.envs.collision_vector, 'to') else self.envs.collision_vector
 
     @property
     def collision_dis(self):
-        return self.envs.collision_dis
+        return self.envs.collision_dis.to(self.device) if hasattr(self.envs.collision_dis, 'to') else self.envs.collision_dis
 
     @property
     def collision_point(self):
-        return self.envs.collision_point
+        return self.envs.collision_point.to(self.device) if hasattr(self.envs.collision_point, 'to') else self.envs.collision_point
 
     @property
     def full_state(self):
-        return self.envs.full_state
+        return self.envs.full_state.to(self.device) if hasattr(self.envs.full_state, 'to') else self.envs.full_state
 
     def env_is_wrapped(self):
         return False

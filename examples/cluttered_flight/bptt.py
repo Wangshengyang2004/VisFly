@@ -30,7 +30,7 @@ if args.train:
 from VisFly.utils.policies import extractors
 from VisFly.utils.algorithms.BPTT import BPTT
 from VisFly.utils import savers
-from VisFly.envs.NavigationEnv import NavigationEnv2  # Use analytical env variant
+from VisFly.envs.NavigationEnv import NavigationEnv4  # Use analytical env variant
 from habitat_sim.sensor import SensorType
 
 os.environ.setdefault("CUDA_VISIBLE_DEVICES", "0")
@@ -51,7 +51,7 @@ training_params.update({
 save_folder = os.path.join(os.path.dirname(os.path.abspath(__file__)), "saved")
 
 # ----------------------- Environment set-up ---------------------------------
-scene_path = "VisFly/datasets/spy_datasets/configs/garage_simple_l_medium"
+scene_path = "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 
 random_kwargs = {
     "state_generator": {
@@ -85,7 +85,7 @@ scene_kwargs = {"path": scene_path}
 def main():
     if args.train:
         # ---------------- Training environment (gradients enabled) ----------
-        env = NavigationEnv2(
+        env = NavigationEnv4(
             num_agent_per_scene=int(training_params["num_env"]),
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
@@ -100,7 +100,7 @@ def main():
         env.to(device)
 
         # ---------------- Evaluation environment (no gradients) -------------
-        eval_env = NavigationEnv2(
+        eval_env = NavigationEnv4(
             num_agent_per_scene=int(training_params["num_env"]),
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
@@ -159,7 +159,7 @@ def main():
 
         from tst import Test  # use the enhanced tester we patched
 
-        env = NavigationEnv2(
+        env = NavigationEnv4(
             num_agent_per_scene=1,
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,

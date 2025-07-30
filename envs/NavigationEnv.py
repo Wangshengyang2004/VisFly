@@ -71,8 +71,10 @@ class NavigationEnv(DroneGymEnvsBase):
             tensor_output=tensor_output,
         )
 
-        self.target = th.ones((self.num_envs, 1)) @ th.as_tensor([9, 0., 1] if target is None else target).reshape(1, -1)
-        self.observation_space["state"] = spaces.Box(low=-np.inf, high=np.inf, shape=(16,), dtype=np.float32)
+        # Fix device mismatch: ensure target is on correct device
+        target_pos = [9, 0., 1] if target is None else target
+        self.target = th.ones((self.num_envs, 1), device=self.device) @ th.as_tensor(target_pos, device=self.device).reshape(1, -1)
+        self.observation_space["state"] = spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32)
         self.observation_space["target"] = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
         self.observation_space["depth"] = spaces.Box(low=0.0, high=1.0, shape=(1, 64, 64), dtype=np.float32)
 
@@ -94,13 +96,13 @@ class NavigationEnv(DroneGymEnvsBase):
         orient = self.orientation.to(self.device)
         vel = self.velocity.to(self.device)
         ang_vel = self.angular_velocity.to(self.device)
-        collision_vector = self.collision_vector.to(self.device)
+        # collision_vector = self.collision_vector.to(self.device)
         state = th.hstack([
             rela_pos,
             orient,
             vel,
             ang_vel,
-            collision_vector
+            # collision_vector
         ])
         
         # Handle depth sensor observation with specified processing
@@ -133,7 +135,6 @@ class NavigationEnv(DroneGymEnvsBase):
         """Define success as reaching within self.success_radius of target."""
         return th.zeros(self.num_envs, device=self.device, dtype=th.bool)
 
-    # For VisFly Manuscript - Hovering-optimized reward function
     def get_reward(self) -> th.Tensor:
         # Compute individual reward components for better diagnostics
         vel = self.velocity.detach().clone()
@@ -231,8 +232,20 @@ class NavigationEnv(DroneGymEnvsBase):
 
     def get_failure(self) -> th.Tensor:
         """Episodes end on collision or altitude violation."""
-        altitude_violation = self.position[:, 2] > 4.5  # Terminate if altitude > 2m
+        altitude_violation = (self.position[:, 2] > 3) | (self.position[:, 2] < 0.2)  # Terminate if altitude > 3m or < 0.2m
         return self.is_collision | altitude_violation
+    
+    def reset(self, *args, **kwargs):
+        """Reset environment and tracking variables."""
+        result = super().reset(*args, **kwargs)
+        
+        # Reset velocity tracking to prevent memory leaks and stale data
+        with th.no_grad():
+            if hasattr(self, 'velocity'):
+                self._prev_velocity = th.zeros_like(self.velocity)
+                self._prev_ang_velocity = th.zeros_like(self.angular_velocity)
+        
+        return result
 
 class NavigationEnv2(DroneGymEnvsBase):
     def __init__(
@@ -295,7 +308,7 @@ class NavigationEnv2(DroneGymEnvsBase):
             spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32)
         self.observation_space["target"] = \
             spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
-        # Initialize target properly for batch size
+        # Initialize target properly for batch size - fix device consistency
         if target is None:
             target_tensor = th.tensor([9, 0., 1], device=self.device)
         else:
@@ -351,7 +364,7 @@ class NavigationEnv2(DroneGymEnvsBase):
             depth = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
             depth = (depth / self.max_sense_radius).clamp(0, 1)
         else:
-            # Create dummy depth when visual disabled or depth not available
+            # Fix device consistency: ensure dummy depth is on correct device
             depth = th.zeros((self.num_envs, 1, 64, 64), device=self.device)
 
         obs_dict = {
@@ -424,12 +437,19 @@ class NavigationEnv2(DroneGymEnvsBase):
         Updated reward function using the analytical reward computation.
         Returns individual components when tensor_output is enabled.
         """
-        # Clone and detach tensors to avoid gradient anomalies
-        position_safe = self.position.clone().detach()
-        velocity_safe = self.velocity.clone().detach()
-        collision_vector_safe = self.collision_vector.clone().detach()
-        direction_safe = self.direction.clone().detach()
-        angular_velocity_safe = self.angular_velocity.clone().detach()
+        # Fix gradient flow: preserve gradients when requires_grad=True
+        if self.requires_grad:
+            position_safe = self.position.clone()
+            velocity_safe = self.velocity.clone()
+            collision_vector_safe = self.collision_vector.clone()
+            direction_safe = self.direction.clone()
+            angular_velocity_safe = self.angular_velocity.clone()
+        else:
+            position_safe = self.position.clone().detach()
+            velocity_safe = self.velocity.clone().detach()
+            collision_vector_safe = self.collision_vector.clone().detach()
+            direction_safe = self.direction.clone().detach()
+            angular_velocity_safe = self.angular_velocity.clone().detach()
         
         collision_vector = collision_vector_safe
         is_collision = self.is_collision
@@ -570,9 +590,16 @@ class NavigationEnv3(NavigationEnv):
         # Setup observation space
         self._setup_observation_space()
         
-        # Initialize tracking buffers for physics reward
-        self.prev_velocity = th.zeros((self.num_envs, 3), device=self.device)
-        self.prev_acceleration = th.zeros((self.num_envs, 3), device=self.device)
+        # Initialize tracking buffers for physics reward with optimized memory usage
+        sim_device = th.device('cpu')  # Will be updated in reset to match position device
+        self.prev_velocity = th.zeros((self.num_envs, 3), dtype=th.float32, device=sim_device)
+        self.prev_acceleration = th.zeros((self.num_envs, 3), dtype=th.float32, device=sim_device)
+        
+        # Validate scene manager initialization
+        if self.visual and hasattr(self.envs, 'sceneManager') and self.envs.sceneManager is not None:
+            if not self.envs.sceneManager.validate_initialization():
+                print("Warning: NavigationEnv3 SceneManager validation failed")
+                print("Environment may have limited functionality")
 
     def _setup_observation_space(self):
         """Configure observation space for state, depth, and target."""
@@ -629,16 +656,19 @@ class NavigationEnv3(NavigationEnv):
         if bounds_max is None:
             bounds_max = th.tensor([8.0, 8.0, 2.0], device=self.device)
         
-        valid_positions = th.zeros((num_positions, 3), device=self.device)
+        valid_positions = th.zeros((num_positions, 3), dtype=th.float32, device=self.device)
         valid_count = 0
+        
+        # Optimize memory by processing in smaller batches for large num_positions
+        batch_size = min(num_positions, 32)  # Process up to 32 positions at once
         
         for _attempt in range(max_attempts):
             if valid_count >= num_positions:
                 break
                 
-            # Generate random positions within bounds
-            remaining = num_positions - valid_count
-            random_positions = th.rand(remaining, 3, device=self.device)
+            # Generate random positions within bounds in batches
+            remaining = min(num_positions - valid_count, batch_size)
+            random_positions = th.rand(remaining, 3, dtype=th.float32, device=self.device)
             random_positions = bounds_min + random_positions * (bounds_max - bounds_min)
             
             # Validate positions
@@ -888,6 +918,35 @@ class NavigationEnv3(NavigationEnv):
             fallback_targets[i] = th.cat([target_xy, target_z.unsqueeze(0)])
         
         return fallback_targets
+    
+    def _reset_tracking_buffers(self):
+        """Reset all tracking buffers to prevent memory leaks and device mismatches."""
+        with th.no_grad():
+            # Get simulation device from position tensor
+            sim_dev = self.position.device if hasattr(self, 'position') else self.device
+            
+            # Reset physics tracking buffers
+            self.prev_velocity = th.zeros((self.num_envs, 3), device=sim_dev)
+            self.prev_acceleration = th.zeros((self.num_envs, 3), device=sim_dev)
+            
+            # Initialize target distance tracking for progress reward if target exists
+            if hasattr(self, 'target') and self.target is not None:
+                current_pos = self.position.clone().detach()
+                current_target = self.target.clone().detach()
+                self.prev_target_distance = (current_target - current_pos).norm(dim=1).to(sim_dev)
+    
+    def close(self):
+        """Clean up resources when environment is closed."""
+        # Clean up tracking buffers to prevent memory leaks
+        if hasattr(self, 'prev_velocity'):
+            del self.prev_velocity
+        if hasattr(self, 'prev_acceleration'):
+            del self.prev_acceleration
+        if hasattr(self, 'prev_target_distance'):
+            del self.prev_target_distance
+        
+        # Call parent close
+        super().close()
 
     # ==================================================================================
     # OBSERVATION AND STATE MANAGEMENT
@@ -974,7 +1033,24 @@ class NavigationEnv3(NavigationEnv):
     
     def reset(self, *args, **kwargs):
         """Reset environment with collision-free spawn positions and valid targets."""
-        # Perform standard reset first
+        # Reset tracking buffers first to avoid stale data
+        self._reset_tracking_buffers()
+        
+        # Validate scene loading before reset
+        if self.visual and hasattr(self.envs, 'sceneManager') and self.envs.sceneManager is not None:
+            # Check if scenes are loaded
+            scenes_loaded = sum(1 for scene in self.envs.sceneManager.scenes if scene is not None)
+            if scenes_loaded == 0:
+                print("Warning: No scenes loaded, attempting to load scenes...")
+                try:
+                    self.envs.sceneManager.load_scenes()
+                except Exception as e:
+                    print(f"Scene loading failed: {e}")
+                    print("Environment may not function properly in visual mode")
+            elif scenes_loaded < self.envs.sceneManager.num_scene:
+                print(f"Warning: Only {scenes_loaded}/{self.envs.sceneManager.num_scene} scenes loaded")
+        
+        # Perform standard reset
         result = super().reset(*args, **kwargs)
         
         # Validate spawn positions and regenerate if needed
@@ -998,16 +1074,8 @@ class NavigationEnv3(NavigationEnv):
         
         # target regeneration disabled for high-performance training
 
-        # Reset physics tracking buffers
-        with th.no_grad():
-            sim_dev = self.position.device
-            self.prev_velocity = th.zeros((self.num_envs, 3), device=sim_dev)
-            self.prev_acceleration = th.zeros((self.num_envs, 3), device=sim_dev)
-            
-            # Initialize target distance tracking for progress reward
-            current_pos = self.position.clone().detach()
-            current_target = self.target.clone().detach()
-            self.prev_target_distance = (current_target - current_pos).norm(dim=1).to(sim_dev)
+        # Reset physics tracking buffers at end to ensure correct device
+        self._reset_tracking_buffers()
 
         return result
 
@@ -1050,10 +1118,15 @@ class NavigationEnv3(NavigationEnv):
         """Improved physics-driven analytical reward with better scaling and balance."""
         device = dyn.position.device
 
-        # Create detached copies to avoid inplace operations while maintaining gradients
-        pos = dyn.position.clone().detach().requires_grad_(True)
-        vel = dyn.velocity.clone().detach().requires_grad_(True)
-        collision_vector = collision_vector.to(device).clone().detach().requires_grad_(True)
+        # Fix gradient flow: don't detach if requires_grad=True
+        if self.requires_grad:
+            pos = dyn.position.clone().requires_grad_(True)
+            vel = dyn.velocity.clone().requires_grad_(True)
+            collision_vector = collision_vector.to(device).clone().requires_grad_(True)
+        else:
+            pos = dyn.position.clone().detach()
+            vel = dyn.velocity.clone().detach()
+            collision_vector = collision_vector.to(device).clone().detach()
 
         # Move tracking buffers to correct device if needed
         if self.prev_velocity.device != device:
@@ -1130,10 +1203,10 @@ class NavigationEnv3(NavigationEnv):
         normalized_jerk = (jerk_magnitude / max_reasonable_jerk).clamp(0, 1)
         r_jerk = -self.lambda_j * normalized_jerk
 
-        # Update buffers
+        # Update buffers - ensure proper memory management
         with th.no_grad():
-            self.prev_velocity = vel.detach().clone()
-            self.prev_acceleration = curr_acc.detach().clone()
+            self.prev_velocity = vel.detach().clone().to(device)
+            self.prev_acceleration = curr_acc.detach().clone().to(device)
 
         # 6. IMPROVED Terminal rewards with better scaling
         # Success reward scaled by remaining time (encourage faster completion)
@@ -1165,3 +1238,88 @@ class NavigationEnv3(NavigationEnv):
             "r_collision": r_collision.to(device),
             # "r_speed": r_speed.to(device),
         }
+        
+        
+        
+class NavigationEnv4(NavigationEnv):
+    def __init__(self, 
+                 num_agent_per_scene: int = 1,
+                 num_scene: int = 1,
+                 seed: int = 42,
+                 visual: bool = True,
+                 requires_grad: bool = False,
+                 random_kwargs: dict = {},
+                 dynamics_kwargs: dict = {},
+                 scene_kwargs: dict = {},
+                 sensor_kwargs: list = [],
+                 device: str = "cpu",
+                 target: Optional[th.Tensor] = None,
+                 max_episode_steps: int = 256,
+                 tensor_output: bool = False,
+                 ):
+        super().__init__(num_agent_per_scene, num_scene, seed, visual, requires_grad, random_kwargs, dynamics_kwargs, scene_kwargs, sensor_kwargs, device, target, max_episode_steps, tensor_output)
+        self.observation_space["state"] = spaces.Box(low=-np.inf, high=np.inf, shape=(13,), dtype=np.float32)
+        self.observation_space["target"] = spaces.Box(low=-np.inf, high=np.inf, shape=(3,), dtype=np.float32)
+        self.observation_space["depth"] = spaces.Box(low=0.0, high=1.0, shape=(1, 64, 64), dtype=np.float32)
+        
+        
+        
+        self.success_radius = 0.5
+        self.max_sense_radius = 10.0
+        
+    def get_observation(self, indices=None):
+        target = self.target.to(self.device)
+        position = self.position.to(self.device)
+        rela_pos = (target - position)
+        orient = self.orientation.to(self.device)
+        vel = self.velocity.to(self.device)
+        ang_vel = self.angular_velocity.to(self.device)
+        
+        state = th.cat([rela_pos, orient, vel, ang_vel], dim=1).to(self.device)
+        
+        depth_raw = th.from_numpy(self.sensor_obs["depth"]).to(self.device)
+        depth = (depth_raw / self.max_sense_radius).clamp(0, 1)
+        
+        return TensorDict({
+            "state": state,
+            "depth": depth,
+            "target": target,
+        })
+        
+    def get_success(self):
+        position = self.position.to(self.device)
+        target = self.target.to(self.device)
+        distance_to_target = (position - target).norm(dim=1)
+        return distance_to_target < self.success_radius
+    
+    def get_failure(self):
+        altitude_violation = self.position[:, 2] > 4.0
+        return self.is_collision | altitude_violation
+    
+    def reset(self, *args, **kwargs):
+        result = super().reset(*args, **kwargs)
+        self.prev_velocity = self.velocity.clone().detach()
+        self.prev_acceleration = th.zeros_like(self.velocity)
+        return result
+    
+    def get_reward(self):
+        base_r = 0.1
+        thrd_perce = th.pi/18
+        velocity = self.velocity.clone().to(self.device)
+        angular_velocity = self.angular_velocity.clone().to(self.device)
+        position = self.position.to(self.device)
+        direction = self.direction.to(self.device)
+        target = self.target.to(self.device)
+        orientation = self.orientation.to(self.device)
+        collision_dis = self.collision_dis.to(self.device)
+        collision_vector = self.collision_vector.to(self.device)
+        reward = ((velocity * (target - position)).sum(dim=1) / (1e-6 + (target - position).norm(dim=1))).clamp_max(10) * 0.01 + \
+            (((direction * velocity).sum(dim=1) / (1e-6 + velocity.norm(dim=1)) / 1).clamp(-1, 1).acos().clamp_min(thrd_perce) - thrd_perce) * 0.01 + \
+            (orientation - th.tensor([1, 0, 0, 0], device=self.device)).norm(dim=1) * -0.00001 + \
+            velocity.norm(dim=1) * -0.002 + \
+            angular_velocity.norm(dim=1) * -0.001 + \
+            (1 / collision_dis + 0.2) * -0.01 + \
+            (1-collision_dis).relu() * ((collision_vector * velocity).sum(dim=1) / (1e-6 + velocity.norm(dim=1))).relu() * -0.005
+                    
+        return reward
+    
