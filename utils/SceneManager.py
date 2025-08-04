@@ -1,4 +1,5 @@
 import habitat_sim
+import numpy as np
 import os
 import sys
 
@@ -384,9 +385,8 @@ class SceneManager(ABC):
 
             # test = self.scenes[scene_id].path_finder
             col_record = self.scenes[scene_id].get_closest_collision_point(
-                pt=self.agents[scene_id][agent_id].scene_node.translation,
+                pt=np.array(self.agents[scene_id][agent_id].scene_node.translation, dtype=np.float32).reshape(3, 1),
                 max_search_radius=sensitive_radius,
-                is_object_collidable=False,
             )
             self._collision_point[scene_id][agent_id], self._is_out_bounds[scene_id][agent_id] = col_record.hit_pos, col_record.is_out_bound
 

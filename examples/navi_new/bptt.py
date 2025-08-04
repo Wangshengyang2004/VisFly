@@ -2,31 +2,47 @@
 
 import sys
 import os
-import traceback
-import numpy as np
-import torch
 import time
+import torch
+import torch as th
+import numpy as np
+import traceback
 
 sys.path.append(os.getcwd())
-from VisFly.utils.policies import extractors
-from VisFly.utils.algorithms.ppo import ppo
-from VisFly.utils import savers
-import torch as th
-from VisFly.envs.NavigationEnv import NavigationEnv
+
 from VisFly.utils.launcher import rl_parser, training_params
-from VisFly.utils.type import Uniform
-from habitat_sim.sensor import SensorType
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 args = rl_parser().parse_args()
+
+from VisFly.utils.policies import extractors
+from VisFly.utils.algorithms.BPTT import BPTT
+from VisFly.utils import savers
+from VisFly.envs.NavigationEnv import NavigationEnv5
+from VisFly.utils.type import Uniform
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+# Disable gradient anomaly detection for physics-based BPTT
+torch.autograd.set_detect_anomaly(True)  # Disabled for stability
+
 """ SAVED HYPERPARAMETERS """
-training_params["num_env"] = 48
-training_params["learning_step"] = 1e7
+# Number of parallel environments (agents) - reduced for GPU memory
+training_params["num_env"] = 160
+# Total learning steps
+training_params["learning_step"] = 2e7
+# Comments and seed
 training_params["comment"] = args.comment
-training_params["max_episode_steps"] = 256
-training_params["n_steps"] = training_params["max_episode_steps"]
-training_params["batch_size"] = training_params["num_env"] * training_params["n_steps"]
+training_params["seed"] = args.seed
+# Episode length
+training_params["max_episode_steps"] = 512
+# Learning rate for BPTT
 training_params["learning_rate"] = 1e-3
+# BPTT horizon - increased for longer episodes without success termination
+training_params["horizon"] = 96
+# Logging frequency
+training_params["dump_step"] = 50
+
+# Directory where to save checkpoints and logs
 save_folder = os.path.dirname(os.path.abspath(sys.argv[0])) + "/saved/"
+
+# Random initialization for environment resets
 random_kwargs = {
     "state_generator": {
         "class": "Uniform",
@@ -41,10 +57,12 @@ random_kwargs = {
     }
 }
 
+# Scene configuration for visual rendering
 scene_kwargs = {
     "path": "datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 }
 
+# Dynamics configuration 
 dynamics_kwargs = {
     "dt": 0.03,
     "ctrl_dt": 0.03,
@@ -54,87 +72,93 @@ dynamics_kwargs = {
 }
 
 def main():
-    # if train mode, train the model
+    # Training mode
     if args.train:
-        # add depth sensor for training
-        sensor_kwargs = [{
-            "sensor_type": SensorType.DEPTH,
-            "uuid": "depth",
-            "resolution": [64, 64],
-        }]
-        env = NavigationEnv(num_agent_per_scene=training_params["num_env"],
-                            random_kwargs=random_kwargs,
-                            sensor_kwargs=sensor_kwargs,
-                            visual=True,
-                            max_episode_steps=training_params["max_episode_steps"],
-                            scene_kwargs=scene_kwargs,
-                            dynamics_kwargs=dynamics_kwargs,
-                            target=th.tensor([6., -8., 1.]),
-                            device="cpu",
-                            )
-
+        env = NavigationEnv5(
+            num_agent_per_scene=int(training_params["num_env"]),
+            random_kwargs=random_kwargs,
+            dynamics_kwargs=dynamics_kwargs,
+            scene_kwargs=scene_kwargs,
+            visual=True, 
+            requires_grad=True,
+            max_episode_steps=int(training_params["max_episode_steps"]),
+            target=th.tensor([6., -8., 1.]),
+            device="cpu",
+            tensor_output=True,
+        )
+        
+        env.reset()
+        
+        # Load pretrained model if provided
         if args.weight is not None:
-            model = ppo.load(save_folder + args.weight, env=env)
-        else:
-            model = ppo(
-                policy="CustomMultiInputPolicy",
+            # Create model first, then load weights
+            model = BPTT(
+                env=env,
+                policy="MultiInputPolicy",
                 policy_kwargs=dict(
                     features_extractor_class=extractors.StateTargetImageExtractor,
-                    features_extractor_kwargs={
-                        "net_arch": {
-                            "depth": {
-                                # "backbone": "mobilenet_s",
-                                "layer": [128],
-                            },
-                            "state": {
-                                "layer": [128, 64],
-                            },
-                            "target": {
-                                "layer": [128, 64],
-                            },
-                            # "recurrent":{
-                            #     "class": "GRU",
-                            #     "kwargs":{
-                            #         "hidden_size": latent_dim,
-                            #     }
-                            # }
-                        }
-                    },
-                    net_arch={
-                        "pi": [64, 64],
-                        "vf": [64, 64],
-
-                    },
+                    features_extractor_kwargs=dict(
+                        net_arch=dict(
+                            depth=dict(layer=[128]),
+                            state=dict(layer=[128, 64]),
+                            target=dict(layer=[128, 64]),
+                        ),
+                        activation_fn=torch.nn.ReLU,
+                    ),
+                    net_arch=dict(pi=[64, 64], qf=[64, 64]),
                     activation_fn=torch.nn.ReLU,
                     optimizer_kwargs=dict(weight_decay=1e-5),
                 ),
-                env=env,
-                verbose=training_params["verbose"],
-                tensorboard_log=save_folder,
-                gamma=training_params["gamma"],  # lower 0.9 ~ 0.99
-                n_steps=training_params["n_steps"],
-                ent_coef=training_params["ent_coef"],
                 learning_rate=training_params["learning_rate"],
-                vf_coef=training_params["vf_coef"],
-                max_grad_norm=training_params["max_grad_norm"],
-                batch_size=training_params["batch_size"],
-                gae_lambda=training_params["gae_lambda"],
-                n_epochs=training_params["n_epochs"],
-                clip_range=training_params["clip_range"],
-                device="cuda",
-                seed=training_params["seed"],
                 comment=args.comment,
+                save_path=save_folder,
+                horizon=int(training_params["horizon"]),
+                gamma=training_params.get("gamma", 0.99),
+                device="cuda",
+                seed=int(training_params["seed"]),
+                dump_step=int(training_params.get("dump_step", 1000)),
             )
-
+            model.load(os.path.join(save_folder + args.weight))
+        else:
+            # Instantiate BPTT algorithm
+            model = BPTT(
+                env=env,
+                policy="MultiInputPolicy",
+                policy_kwargs=dict(
+                    features_extractor_class=extractors.StateTargetImageExtractor,
+                    features_extractor_kwargs=dict(
+                        net_arch=dict(
+                            depth=dict(layer=[128]),
+                            state=dict(layer=[128, 64]),
+                            target=dict(layer=[128, 64]),
+                        ),
+                        activation_fn=torch.nn.ReLU,
+                    ),
+                    net_arch=dict(pi=[64, 64], qf=[64, 64]),
+                    activation_fn=torch.nn.ReLU,
+                    optimizer_kwargs=dict(weight_decay=1e-5),
+                ),
+                learning_rate=training_params["learning_rate"],
+                comment=args.comment,
+                save_path=save_folder,
+                horizon=int(training_params["horizon"]),
+                gamma=training_params.get("gamma", 0.99),
+                device="cuda",
+                seed=int(training_params["seed"]),
+                dump_step=int(training_params.get("dump_step", 1000)),
+            )
+        
+        # Train
         start_time = time.time()
-        model.learn(training_params["learning_step"])
+        model.learn(int(training_params["learning_step"]))
         model.save()
         training_params["time"] = time.time() - start_time
-
-        savers.save_as_csv(save_folder + "training_params.csv", training_params)
-
-    # Testing mode with a trained weight
+        savers.save_as_csv(save_folder + "training_params_bptt.csv", training_params)
     else:
+        # Testing mode
+        test_model_path = save_folder + args.weight
+        
+        # Add render settings for test environment
         test_scene_kwargs = {
             "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall",
             "render_settings": {
@@ -147,24 +171,52 @@ def main():
                 "axes": True,
             }
         }
-        test_model_path = save_folder + args.weight
+        
         from tst import Test
-        sensor_kwargs = [{
-            "sensor_type": SensorType.DEPTH,
-            "uuid": "depth",
-            "resolution": [64, 64],
-        }]
-        env = NavigationEnv(num_agent_per_scene=1, visual=True,
-                            random_kwargs=random_kwargs,
-                            scene_kwargs=test_scene_kwargs,
-                            sensor_kwargs=sensor_kwargs,
-                            dynamics_kwargs=dynamics_kwargs,
-                            target=th.tensor([6., -8., 1.]),
-                            device="cpu",
-                            )
-
-        model = ppo.load(test_model_path, env=env)
-
+        env = NavigationEnv5(
+            num_agent_per_scene=1,
+            random_kwargs=random_kwargs,
+            dynamics_kwargs=dynamics_kwargs,
+            scene_kwargs=test_scene_kwargs,  # Use test scene kwargs with render settings
+            visual=True, 
+            requires_grad=True,
+            max_episode_steps=int(training_params["max_episode_steps"]),
+            target=th.tensor([[6., -8., 1.]]),
+            device="cpu",
+            tensor_output=True,
+        )
+        env.reset()
+        
+        # Print agent spawn position for testing
+        print(f"Agent spawn position: {env.position[0].cpu().numpy()}")
+        print(f"Target position: {env.target[0].cpu().numpy()}")
+        spawn_to_target_distance = ((env.target[0] - env.position[0]).norm()).item()
+        print(f"Initial distance to target: {spawn_to_target_distance:.2f}m")
+        
+        # Initialize BPTT model for testing
+        model = BPTT(
+            env=env,
+            policy="MultiInputPolicy",
+            policy_kwargs=dict(
+                features_extractor_class=extractors.StateTargetImageExtractor,
+                features_extractor_kwargs=dict(
+                    net_arch=dict(
+                        depth=dict(layer=[128]),
+                        state=dict(layer=[128, 64]),
+                        target=dict(layer=[128, 64]),
+                    ),
+                    activation_fn=torch.nn.ReLU,
+                ),
+                net_arch=dict(pi=[64, 64], qf=[64, 64]),
+                activation_fn=torch.nn.ReLU,
+                optimizer_kwargs=dict(weight_decay=1e-5),
+            ),
+            device="cuda"
+        )
+        print(f"Loading model from: {test_model_path}")
+        model.load(test_model_path)
+        # Use deterministic policy for testing
+        # Wrap model for test
         class ModelWrapper:
             def __init__(self, policy):
                 self.policy = policy
@@ -173,7 +225,7 @@ def main():
         test_handle = Test(
             env,  # First parameter: env
             wrapped,  # Second parameter: model (with .policy attribute)
-            "rl_test",  # Third parameter: name (as string)
+            "bptt_test",  # Third parameter: name (as string)
             os.path.dirname(os.path.realpath(__file__)) + "/saved/test",  # Fourth parameter: save_path
         )
         # --- Extended evaluation -------------------------------------------------

@@ -121,7 +121,7 @@ class BPTT(shac):
                             obs = obs.clone().detach()
                         pre_obs = obs
                         # iteration
-                        actions, _, h = self.policy.actor.action_log_prob(obs)
+                        actions, log_prob, h = self.policy.actor.action_log_prob(obs)
                         clipped_actions = th.clip(
                             actions, th.as_tensor(self.action_space.low, device=self.device), th.as_tensor(self.action_space.high, device=self.device)
                         )
@@ -131,19 +131,22 @@ class BPTT(shac):
                         reward, done = reward.to(self.device), done.to(self.device).to(th.bool)
                         current_step += self.num_envs
 
-                        # compute the loss
-                        actor_loss += -1 * reward * discount_factor
+                        # compute the policy gradient loss (REINFORCE)
+                        # Detach reward to prevent backprop through physics while keeping policy gradients
+                        reward_detached = reward.detach()
+                        actor_loss = actor_loss + (-log_prob * reward_detached * discount_factor)
                         discount_factor = discount_factor * self.gamma * (~done) + done
 
                     # update
                     actor_loss = (actor_loss).mean()
                     self.policy.actor.optimizer.zero_grad()
                     actor_loss.backward()
+                    # Detach AFTER backward pass to preserve gradient flow during BPTT
+                    self.env.detach()
                     th.nn.utils.clip_grad_norm_(self.policy.actor.parameters(), 0.5)
                     # record grad
                     # get_network_statistics(self.actor, self._logger, is_record=pbar.n - previous_step >= self._dump_step)
                     self.policy.actor.optimizer.step()
-                    self.env.detach()
 
                     # evaluate
                     if pbar.n - previous_step >= self._dump_step:
@@ -166,7 +169,8 @@ class BPTT(shac):
                                         eq_info_buffer.append(info[index]["episode"])
                                         if self.eval_env.tensor_output:
                                             for key, value in self.eval_env._indiv_rewards.items():
-                                                eq_info_buffer[-1]["extra"][key] = value
+                                                # Detach only for logging, not for learning
+                                                eq_info_buffer[-1]["extra"][key] = value.detach() if hasattr(value, 'detach') else value
                                 if done.all():
                                     break
 

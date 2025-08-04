@@ -160,8 +160,11 @@ class DroneGymEnvsBase(VecEnv):
             assert isinstance(self._indiv_reward, dict) and "reward" in self._indiv_reward.keys()
             self._reward = self._indiv_reward["reward"]
             for key in self._indiv_reward.keys():
-                self._indiv_rewards[key] += self._indiv_reward[key]
-        # Avoid in-place modification on a tensor that participates in the autograd graph
+                if self.requires_grad:
+                    self._indiv_rewards[key] = self._indiv_rewards[key].detach() + self._indiv_reward[key]
+                else:
+                    self._indiv_rewards[key] += self._indiv_reward[key]
+        # Ensure consistent accumulation strategy with _indiv_rewards  
         if self.requires_grad:
             self._rewards = self._rewards.detach() + self._reward
         else:
@@ -234,6 +237,12 @@ class DroneGymEnvsBase(VecEnv):
             "l": self._step_count[indice].cpu().clone().detach().numpy(),
             "t": (self._step_count[indice] * self.envs.dynamics.ctrl_dt).cpu().clone().detach().numpy(),
         }
+        
+        # Debug verification: ensure _rewards equals _indiv_rewards["reward"] 
+        if self._indiv_rewards is not None and "reward" in self._indiv_rewards:
+            reward_diff = abs(self._rewards[indice].item() - self._indiv_rewards["reward"][indice].item())
+            if reward_diff > 1e-6:
+                print(f"WARNING: Reward mismatch for agent {indice}: _rewards={self._rewards[indice].item():.6f}, _indiv_rewards[reward]={self._indiv_rewards['reward'][indice].item():.6f}, diff={reward_diff:.6f}")
         if self.requires_grad:
             _info["terminal_observation"] = {
                 key: observations[key][indice].detach() if hasattr(observations[key][indice], 'detach') else observations[key][indice] for key in observations.keys()
@@ -547,6 +556,14 @@ class DroneGymEnvsBase(VecEnv):
     @property
     def angular_velocity(self):
         return self.envs.angular_velocity.to(self.device) if hasattr(self.envs.angular_velocity, 'to') else self.envs.angular_velocity
+
+    @property
+    def acceleration(self):
+        return self.envs.acceleration.to(self.device) if hasattr(self.envs.acceleration, 'to') else self.envs.acceleration
+
+    @property
+    def angular_acceleration(self):
+        return self.envs.angular_acceleration.to(self.device) if hasattr(self.envs.angular_acceleration, 'to') else self.envs.angular_acceleration
 
     @property
     def t(self):

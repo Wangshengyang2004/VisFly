@@ -3,6 +3,7 @@
 import sys
 import os
 import time
+from habitat_sim.sensor import SensorType
 import torch
 import torch as th
 import numpy as np
@@ -16,15 +17,16 @@ args = rl_parser().parse_args()
 from VisFly.utils.policies import extractors
 from VisFly.utils.algorithms.BPTT import BPTT
 from VisFly.utils import savers
-from VisFly.envs.NavigationEnv import NavigationEnv2
+from VisFly.envs.NavigationEnv import NavigationEnv4
 from VisFly.utils.type import Uniform
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 # Disable gradient anomaly detection for physics-based BPTT
 torch.autograd.set_detect_anomaly(True)  # Disabled for stability
 
 """ SAVED HYPERPARAMETERS """
-# Number of parallel environments (agents)
-training_params["num_env"] = 150
+# Number of parallel environments (agents) - reduced for GPU memory
+training_params["num_agent_per_scene"] = 48
+# training_params["num_scene"] = 20
 # Total learning steps
 training_params["learning_step"] = 1e7
 # Comments and seed
@@ -34,7 +36,9 @@ training_params["seed"] = args.seed
 training_params["max_episode_steps"] = 256
 # Learning rate for BPTT
 training_params["learning_rate"] = 1e-3
-# BPTT horizon
+training_params["n_steps"] = training_params["max_episode_steps"]
+training_params["batch_size"] = training_params["num_agent_per_scene"] * training_params["n_steps"]
+# BPTT horizon - increased for longer episodes without success termination
 training_params["horizon"] = 96
 # Logging frequency
 training_params["dump_step"] = 50
@@ -48,7 +52,7 @@ random_kwargs = {
         "class": "Uniform",
         "kwargs": [
             {
-                "position": {"mean": [3., 0., 1.], "half": [0.5, 0.5, 0.5]},
+                "position": {"mean": [6., -2., 1.], "half": [.50, .50, .50]},
                 # "orientation": {"mean": [0., 0., 0.], "half": [0.0, 0.0, 3.1416]},
                 # "velocity": {"mean": [0., 0., 0.], "half": [0.1, 0.1, 0.1]},
                 # "angular_velocity": {"mean": [0., 0., 0.], "half": [1., 1., 1.]},
@@ -59,7 +63,7 @@ random_kwargs = {
 
 # Scene configuration for visual rendering
 scene_kwargs = {
-    "path": "VisFly/datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
+    "path": "datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 }
 
 # Dynamics configuration 
@@ -74,20 +78,23 @@ dynamics_kwargs = {
 def main():
     # Training mode
     if args.train:
-        env = NavigationEnv2(
-            num_agent_per_scene=int(training_params["num_env"]),
+        env = NavigationEnv4(
+            num_agent_per_scene=int(training_params["num_agent_per_scene"]),
+            sensor_kwargs=[{
+            "sensor_type": SensorType.DEPTH,
+            "uuid": "depth",
+            "resolution": [64, 64],
+        }],
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=scene_kwargs,
             visual=True, 
             requires_grad=True,
             max_episode_steps=int(training_params["max_episode_steps"]),
-            target=th.tensor([[10., 0., 1.]]),
+            target=th.tensor([6., -8., 1.]),
             device="cpu",
             tensor_output=True,
         )
-        
-        env.reset()
         
         # Load pretrained model if provided
         if args.weight is not None:
@@ -96,10 +103,10 @@ def main():
                 env=env,
                 policy="MultiInputPolicy",
                 policy_kwargs=dict(
-                    features_extractor_class=extractors.StateTargetExtractor,
+                    features_extractor_class=extractors.StateTargetImageExtractor,
                     features_extractor_kwargs=dict(
                         net_arch=dict(
-                            # depth=dict(layer=[128]),
+                            depth=dict(layer=[128]),
                             state=dict(layer=[128, 64]),
                             target=dict(layer=[128, 64]),
                         ),
@@ -125,7 +132,7 @@ def main():
                 env=env,
                 policy="MultiInputPolicy",
                 policy_kwargs=dict(
-                    features_extractor_class=extractors.StateTargetExtractor,
+                    features_extractor_class=extractors.StateTargetImageExtractor,
                     features_extractor_kwargs=dict(
                         net_arch=dict(
                             depth=dict(layer=[128]),
@@ -173,28 +180,41 @@ def main():
         }
         
         from tst import Test
-        env = NavigationEnv2(
+        env = NavigationEnv4(
             num_agent_per_scene=1,
+            num_scene=1,
+            sensor_kwargs=[{
+            "sensor_type": SensorType.DEPTH,
+            "uuid": "depth",
+            "resolution": [64, 64],
+        }],
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=test_scene_kwargs,  # Use test scene kwargs with render settings
-            visual=True,  # Enable visual for depth sensor
+            visual=True, 
+            requires_grad=True,
             max_episode_steps=int(training_params["max_episode_steps"]),
-            target=th.tensor([[10., 0., 1.]]),
+            target=th.tensor([[6., -8., 1.]]),
             device="cpu",
             tensor_output=True,
         )
         env.reset()
+        
+        # Print agent spawn position for testing
+        print(f"Agent spawn position: {env.position[0].cpu().numpy()}")
+        print(f"Target position: {env.target[0].cpu().numpy()}")
+        spawn_to_target_distance = ((env.target[0] - env.position[0]).norm()).item()
+        print(f"Initial distance to target: {spawn_to_target_distance:.2f}m")
         
         # Initialize BPTT model for testing
         model = BPTT(
             env=env,
             policy="MultiInputPolicy",
             policy_kwargs=dict(
-                features_extractor_class=extractors.StateTargetExtractor,
+                features_extractor_class=extractors.StateTargetImageExtractor,
                 features_extractor_kwargs=dict(
                     net_arch=dict(
-                        # depth=dict(layer=[128]),
+                        depth=dict(layer=[128]),
                         state=dict(layer=[128, 64]),
                         target=dict(layer=[128, 64]),
                     ),
@@ -204,10 +224,11 @@ def main():
                 activation_fn=torch.nn.ReLU,
                 optimizer_kwargs=dict(weight_decay=1e-5),
             ),
-            device="cpu"
+            device="cuda"
         )
         print(f"Loading model from: {test_model_path}")
         model.load(test_model_path)
+        # Use deterministic policy for testing
         # Wrap model for test
         class ModelWrapper:
             def __init__(self, policy):
@@ -231,6 +252,15 @@ def main():
             if not os.path.exists(episode_dir):
                 os.makedirs(episode_dir, exist_ok=True)
 
+            # Print agent start position for this episode
+            start_position = env.position[0].cpu().numpy()
+            target_position = env.target[0].cpu().numpy()
+            start_distance = ((env.target[0] - env.position[0]).norm()).item()
+            print(f"\n=== Episode {ep_i} ===")
+            print(f"Agent start position: {start_position}")
+            print(f"Target position: {target_position}")
+            print(f"Start distance to target: {start_distance:.2f}m")
+
             # Clear accumulated data from previous episodes
             test_handle.obs_all = []
             test_handle.state_all = []
@@ -239,6 +269,7 @@ def main():
             test_handle.collision_all = []
             test_handle.render_image_all = []
             test_handle.reward_all = []
+            test_handle.reward_components = []
             test_handle.t = []
             test_handle.eq_r = []
             test_handle.eq_l = []
@@ -294,6 +325,13 @@ def main():
             except Exception as e:
                 print(f"Error saving combined video for episode {ep_i}: {e}")
                 print("Continuing with next episode...")
+
+            # Print agent end position for this episode
+            end_position = env.position[0].cpu().numpy()
+            end_distance = ((env.target[0] - env.position[0]).norm()).item()
+            print(f"Agent end position: {end_position}")
+            print(f"End distance to target: {end_distance:.2f}m")
+            print(f"Distance traveled: {((th.tensor(end_position) - th.tensor(start_position)).norm()).item():.2f}m")
 
             # Count agents that achieved success at any point during the episode
             successful_agents = set()

@@ -20,18 +20,19 @@ from VisFly.envs.NavigationEnv import NavigationEnv
 from VisFly.utils.type import Uniform
 os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 # Disable gradient anomaly detection for physics-based BPTT
-# torch.autograd.set_detect_anomaly(True)  # Disabled for stability
+torch.autograd.set_detect_anomaly(False)  # Enable for debugging
 
 """ SAVED HYPERPARAMETERS """
 # Number of parallel environments (agents) - reduced for GPU memory
-training_params["num_env"] = 160
+training_params["num_agent_per_scene"] = 48
+# training_params["num_scene"] = 20
 # Total learning steps
-training_params["learning_step"] = 2e7
+training_params["learning_step"] = 1e7
 # Comments and seed
 training_params["comment"] = args.comment
 training_params["seed"] = args.seed
 # Episode length
-training_params["max_episode_steps"] = 512
+training_params["max_episode_steps"] = 256
 # Learning rate for BPTT
 training_params["learning_rate"] = 1e-3
 # BPTT horizon - increased for longer episodes without success termination
@@ -48,10 +49,10 @@ random_kwargs = {
         "class": "Uniform",
         "kwargs": [
             {
-                "position": {"mean": [6., -2., 1.], "half": [.50, .50, .50]},
-                # "orientation": {"mean": [0., 0., 0.], "half": [0.0, 0.0, 3.1416]},
-                # "velocity": {"mean": [0., 0., 0.], "half": [0.1, 0.1, 0.1]},
-                # "angular_velocity": {"mean": [0., 0., 0.], "half": [1., 1., 1.]},
+                "position": {"mean": [6., -2., 2.], "half": [.50, .50, .50]},
+                "orientation": {"mean": [0., 0., 0.], "half": [0.0, 0.0, 3.1416]},
+                "velocity": {"mean": [0., 0., 0.], "half": [0.1, 0.1, 0.1]},
+                "angular_velocity": {"mean": [0., 0., 0.], "half": [1., 1., 1.]},
             }
         ]
     }
@@ -59,7 +60,7 @@ random_kwargs = {
 
 # Scene configuration for visual rendering
 scene_kwargs = {
-    "path": "datasets/visfly-beta/configs/scenes/box15_wall_pillar"
+    "path": "datasets/visfly-beta/configs/scenes/box15_wall_box15_wall"
 }
 
 # Dynamics configuration 
@@ -75,14 +76,15 @@ def main():
     # Training mode
     if args.train:
         env = NavigationEnv(
-            num_agent_per_scene=int(training_params["num_env"]),
+            num_agent_per_scene=int(training_params["num_agent_per_scene"]),
+            # num_scene=int(training_params["num_scene"]),
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=scene_kwargs,
             visual=True, 
             requires_grad=True,
             max_episode_steps=int(training_params["max_episode_steps"]),
-            target=th.tensor([6., -8., 1.]),
+            target=th.tensor([6., -8., 2.]),
             device="cpu",
             tensor_output=True,
         )
@@ -175,6 +177,7 @@ def main():
         from tst import Test
         env = NavigationEnv(
             num_agent_per_scene=1,
+            num_scene=1,
             random_kwargs=random_kwargs,
             dynamics_kwargs=dynamics_kwargs,
             scene_kwargs=test_scene_kwargs,  # Use test scene kwargs with render settings
